@@ -30,7 +30,7 @@ const firebaseConfig = {
   appId: "1:525781235034:web:12a1a632f1ff97db22ef63",
 };
 
-const app = initializeApp(firebaseConfig);
+const app = initializeApp(firebaseConfig, "membre");
 const auth = getAuth(app);
 const db = getFirestore(app);
 
