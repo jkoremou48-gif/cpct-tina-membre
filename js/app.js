@@ -36,21 +36,27 @@ const loading = document.getElementById('loading');
 const dashboard = document.getElementById('dashboard');
 const loginError = document.getElementById('loginError');
 
-// --- Connexion ---
+function telephoneVersEmailTechnique(telephone) {
+  const chiffres = telephone.replace(/\D/g, "");
+  return `${chiffres}@membre.cpct-tina.local`;
+}
+
 document.getElementById('loginBtn').addEventListener('click', async () => {
-  const email = document.getElementById('loginEmail').value.trim();
+  const telephone = document.getElementById('loginEmail').value.trim();
   const password = document.getElementById('loginPassword').value;
   loginError.textContent = '';
 
-  if (!email || !password) {
+  if (!telephone || !password) {
     loginError.textContent = 'Veuillez remplir tous les champs.';
     return;
   }
 
+  const email = telephoneVersEmailTechnique(telephone);
+
   try {
     await signInWithEmailAndPassword(auth, email, password);
   } catch (err) {
-    loginError.textContent = "Email ou mot de passe incorrect.";
+    loginError.textContent = "Téléphone ou mot de passe incorrect.";
   }
 });
 
