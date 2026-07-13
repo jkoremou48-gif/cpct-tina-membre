@@ -1,9 +1,22 @@
 {
-  "name": "CPCT-TINA Membre",
-  "short_name": "TINA Membre",
-  "start_url": ".",
+  "name": "CPCT-TINA — Espace Membre",
+  "short_name": "CPCT-TINA Membre",
+  "description": "Application de gestion pour le Membre",
+  "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#f5f5f5",
-  "theme_color": "#0d6efd",
-  "icons": []
+  "background_color": "#14213D",
+  "theme_color": "#14213D",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
 }
