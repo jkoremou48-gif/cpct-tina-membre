@@ -85,7 +85,7 @@ onAuthStateChanged(auth, async (user) => {
 // --- Chargement des données du membre ---
 async function chargerDonneesMembre(uid) {
   try {
-    const memberRef = doc(db, 'members', uid);
+    const memberRef = doc(db, 'users', uid);
     const memberSnap = await getDoc(memberRef);
 
     if (memberSnap.exists()) {
@@ -96,7 +96,7 @@ async function chargerDonneesMembre(uid) {
       document.getElementById('memberName').textContent = 'Membre';
       document.getElementById('soldeMembre').textContent = formatMontant(0);
     }
-
+ 
     ecouterCotisations(uid);
     ecouterHistoriqueRetraits(uid);
 
@@ -108,8 +108,8 @@ async function chargerDonneesMembre(uid) {
 // --- Écoute en temps réel des cotisations ---
 function ecouterCotisations(uid) {
   const q = query(
-    collection(db, 'cotisations'),
-    where('memberId', '==', uid),
+    collection(db, 'payments'),
+    where('membre_id', '==', uid),
     orderBy('date', 'desc')
   );
 
