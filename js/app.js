@@ -109,8 +109,7 @@ async function chargerDonneesMembre(uid) {
 function ecouterCotisations(uid) {
   const q = query(
     collection(db, 'payments'),
-    where('membre_id', '==', uid),
-    orderBy('date', 'desc')
+    where('membre_id', '==', uid)
   );
 
   onSnapshot(q, (snapshot) => {
@@ -122,25 +121,28 @@ function ecouterCotisations(uid) {
       return;
     }
 
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      const row = document.createElement('div');
-      row.className = 'cotis-row';
-      row.innerHTML = `
-        <span>${formatDate(data.date)}</span>
-        <span>${formatMontant(data.montant)}</span>
-      `;
-      list.appendChild(row);
-    });
+    const docs = snapshot.docs
+        .map((d) => d.data())
+        .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
+
+      docs.forEach((data) => {
+        const row = document.createElement('div');
+        row.className = 'cotis-row';
+        row.innerHTML = `
+          <span>${formatDate(data.date)}</span>
+          <span>${formatMontant(data.montant)}</span>
+        `;
+        list.appendChild(row);
+      });
   });
 }
 
 // --- Écoute en temps réel de l'historique des demandes de retrait ---
 function ecouterHistoriqueRetraits(uid) {
   const q = query(
-    collection(db, 'withdrawalRequests'),
-    where('memberId', '==', uid),
-    orderBy('dateCreation', 'desc')
+      collection(db, 'withdrawalRequests'),
+      where('memberId', '==', uid)
+    );
   );
 
   onSnapshot(q, (snapshot) => {
@@ -152,8 +154,11 @@ function ecouterHistoriqueRetraits(uid) {
       return;
     }
 
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
+    const docs = snapshot.docs
+      .map((d) => d.data())
+      .sort((a, b) => (b.dateCreation?.toMillis?.() || 0) - (a.dateCreation?.toMillis?.() || 0));
+
+    docs.forEach((data) => {
       const row = document.createElement('div');
       row.className = 'cotis-row';
       row.innerHTML = `
@@ -163,7 +168,8 @@ function ecouterHistoriqueRetraits(uid) {
       list.appendChild(row);
     });
   });
-}
+  }
+    
 
 // --- Demande de retrait ---
 document.getElementById('demandeRetraitBtn').addEventListener('click', async () => {
