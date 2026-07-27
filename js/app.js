@@ -30,6 +30,8 @@ import {
 
 let currentUser = null;
 let currentMemberData = null;
+let totalConfirmeMembre = 0;
+let totalCommissionMembre = 0;
 
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
@@ -91,13 +93,21 @@ async function chargerDonneesMembre(uid) {
     if (memberSnap.exists()) {
       currentMemberData = memberSnap.data();
       document.getElementById('memberName').textContent = currentMemberData.nom || 'Membre';
-      document.getElementById('soldeMembre').textContent = formatMontant(currentMemberData.solde || 0);
+
+      if (currentMemberData.parrain_id) {
+        const collecteurSnap = await getDoc(doc(db, 'users', currentMemberData.parrain_id));
+        if (collecteurSnap.exists()) {
+          const collecteur = collecteurSnap.data();
+          document.getElementById('collecteurNom').textContent = collecteur.nom || '';
+          document.getElementById('collecteurTelephone').textContent = collecteur.telephone || '';
+        }
+      }
     } else {
       document.getElementById('memberName').textContent = 'Membre';
-      document.getElementById('soldeMembre').textContent = formatMontant(0);
     }
  
     ecouterCotisations(uid);
+    ecouterContratsMembre(uid);
     ecouterHistoriqueRetraits(uid);
 
   } catch (err) {
@@ -105,7 +115,28 @@ async function chargerDonneesMembre(uid) {
   }
 }
 
-// --- Écoute en temps réel des cotisations ---
+// --- Écoute en temps réel des contrats + calcul du solde ---
+function ecouterContratsMembre(uid) {
+  const q = query(
+    collection(db, 'contracts'),
+    where('membre_id', '==', uid)
+  );
+
+  onSnapshot(q, (snapshot) => {
+    totalCommissionMembre = snapshot.docs.reduce(
+      (s, d) => s + Number(d.data().commission || 0), 0
+    );
+    recalculerSolde();
+  });
+}
+
+// --- Recalcule et affiche le solde du membre ---
+function recalculerSolde() {
+  const solde = totalConfirmeMembre - totalCommissionMembre;
+  document.getElementById('soldeMembre').textContent = formatMontant(solde > 0 ? solde : 0);
+}
+
+    // --- Écoute en temps réel des cotisations ---
 function ecouterCotisations(uid) {
   const q = query(
     collection(db, 'payments'),
@@ -124,7 +155,10 @@ function ecouterCotisations(uid) {
     const docs = snapshot.docs
         .map((d) => d.data())
         .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
-
+totalConfirmeMembre = docs
+      .filter((d) => d.statut === 'confirme')
+      .reduce((s, d) => s + Number(d.montant || 0), 0);
+    recalculerSolde();
       docs.forEach((data) => {
         const row = document.createElement('div');
         row.className = 'cotis-row';
