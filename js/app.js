@@ -143,7 +143,6 @@ function ecouterHistoriqueRetraits(uid) {
       collection(db, 'withdrawalRequests'),
       where('memberId', '==', uid)
     );
-  );
 
   onSnapshot(q, (snapshot) => {
     const list = document.getElementById('withdrawalHistory');
