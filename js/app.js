@@ -132,7 +132,7 @@ function ecouterContratsMembre(uid) {
 
 // --- Recalcule et affiche le solde du membre ---
 function recalculerSolde() {
-  const solde = totalConfirmeMembre - totalCommissionMembre;
+  const solde = totalConfirmeMembre;
   document.getElementById('soldeMembre').textContent = formatMontant(solde > 0 ? solde : 0);
 }
 
@@ -156,7 +156,7 @@ function ecouterCotisations(uid) {
         .map((d) => d.data())
         .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
 totalConfirmeMembre = docs
-      .filter((d) => d.statut === 'confirme')
+      .filter((d) => d.statut === 'confirme' && d.jour_numero !== 1)
       .reduce((s, d) => s + Number(d.montant || 0), 0);
     recalculerSolde();
       docs.forEach((data) => {
@@ -216,7 +216,7 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
     return;
   }
 
-  const soldeActuel = currentMemberData ? (currentMemberData.solde || 0) : 0;
+  const soldeActuel = totalConfirmeMembre;
   if (montant > soldeActuel) {
     afficherMessage('retraitMsg', 'Montant supérieur à votre solde disponible.', 'red');
     return;
