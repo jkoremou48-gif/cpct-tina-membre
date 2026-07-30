@@ -33,6 +33,8 @@ let currentUser = null;
 let currentMemberData = null;
 let totalConfirmeMembre = 0;
 let totalCommissionMembre = 0;
+let propositionActuelle = null;
+let pretActif = null;
 
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
@@ -106,10 +108,11 @@ async function chargerDonneesMembre(uid) {
     } else {
       document.getElementById('memberName').textContent = 'Membre';
     }
- 
-    ecouterCotisations(uid);
+ ecouterCotisations(uid);
     ecouterContratsMembre(uid);
     ecouterHistoriqueRetraits(uid);
+    ecouterPretActif(uid);
+    ecouterPropositionReconduction(uid);
 
   } catch (err) {
     console.error('Erreur chargement membre :', err);
@@ -135,6 +138,83 @@ function ecouterContratsMembre(uid) {
 function recalculerSolde() {
   const solde = totalConfirmeMembre;
   document.getElementById('soldeMembre').textContent = formatMontant(solde > 0 ? solde : 0);
+}
+// --- Écoute en temps réel du prêt actif ---
+function ecouterPretActif(uid) {
+  const q = query(
+    collection(db, 'prets'),
+    where('membre_id', '==', uid),
+    where('statut', '==', 'actif')
+  );
+  onSnapshot(q, (snapshot) => {
+    if (snapshot.empty) {
+      pretActif = null;
+      afficherPretActif();
+      return;
+    }
+    const d = snapshot.docs[0];
+    pretActif = { id: d.id, ...d.data() };
+    afficherPretActif();
+  });
+}
+
+function afficherPretActif() {
+  const zone = document.getElementById('pretZone');
+  if (!zone) return;
+  if (!pretActif) {
+    zone.innerHTML = '';
+    return;
+  }
+  const dateDebut = pretActif.date_debut && pretActif.date_debut.toDate ? pretActif.date_debut.toDate() : new Date();
+  const nbSemaines = Math.floor((new Date() - dateDebut) / (1000 * 60 * 60 * 24 * 7));
+  const montantDu = pretActif.montant_initial * (1 + pretActif.taux_hebdo * nbSemaines);
+  zone.innerHTML = `
+    <div class="pret-card">
+      <p><strong>Prêt en cours</strong></p>
+      <p>Capital emprunté : ${formatMontant(pretActif.montant_initial)}</p>
+      <p>Montant dû actuellement (2%/semaine) : <strong>${formatMontant(montantDu)}</strong></p>
+    </div>
+  `;
+}
+
+// --- Écoute en temps réel de la proposition de reconduction ---
+function ecouterPropositionReconduction(uid) {
+  const q = query(
+    collection(db, 'propositions_reconduction'),
+    where('membre_id', '==', uid),
+    where('statut', '==', 'en_attente')
+  );
+  onSnapshot(q, (snapshot) => {
+    if (snapshot.empty) {
+      propositionActuelle = null;
+      afficherPropositionReconduction();
+      return;
+    }
+    const d = snapshot.docs[0];
+    propositionActuelle = { id: d.id, ...d.data() };
+    afficherPropositionReconduction();
+  });
+}
+
+function afficherPropositionReconduction() {
+  const zone = document.getElementById('propositionZone');
+  if (!zone) return;
+  if (!propositionActuelle) {
+    zone.innerHTML = '';
+    return;
+  }
+  zone.innerHTML = `
+    <div class="proposition-card">
+      <p><strong>Votre contrat est arrivé à son terme.</strong></p>
+      <p>Souhaitez-vous reconduire votre épargne ?</p>
+      <button id="btn-reconduire-memes-termes">Reconduire aux mêmes conditions</button>
+      <button id="btn-reconduire-modifie">Reconduire avec modification</button>
+      <button id="btn-refuser-reconduction">Ne pas reconduire</button>
+    </div>
+  `;
+  document.getElementById('btn-reconduire-memes-termes').addEventListener('click', () => repondreProposition('reconduit_meme_termes'));
+  document.getElementById('btn-reconduire-modifie').addEventListener('click', ouvrirModificationMontant);
+  document.getElementById('btn-refuser-reconduction').addEventListener('click', () => repondreProposition('refuse'));
 }
 
     // --- Écoute en temps réel des cotisations ---
@@ -238,3 +318,44 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
     afficherMessage('retraitMsg', "Erreur lors de l'envoi de la demande.", 'red');
   }
 });
+// --- Réponse à une proposition de reconduction ---
+async function repondreProposition(choix) {
+  if (!propositionActuelle) return;
+  try {
+    await updateDoc(doc(db, 'propositions_reconduction', propositionActuelle.id), {
+      statut: choix,
+      date_reponse: serverTimestamp(),
+    });
+    afficherMessage('retraitMsg', 'Votre réponse a été enregistrée.', 'green');
+  } catch (err) {
+    console.error('Erreur réponse proposition :', err);
+    afficherMessage('retraitMsg', "Erreur lors de l'envoi de votre réponse.", 'red');
+  }
+}
+
+// --- Demande de reconduction avec modification du montant ---
+function ouvrirModificationMontant() {
+  const nouveauMontant = prompt('Quel nouveau montant de versement quotidien souhaitez-vous ? (GNF)');
+  if (nouveauMontant === null) return;
+  const montantNum = parseFloat(nouveauMontant);
+  if (isNaN(montantNum) || montantNum <= 0) {
+    afficherMessage('retraitMsg', 'Montant invalide.', 'red');
+    return;
+  }
+  enregistrerModificationMontant(montantNum);
+}
+
+async function enregistrerModificationMontant(nouveauMontant) {
+  if (!propositionActuelle) return;
+  try {
+    await updateDoc(doc(db, 'propositions_reconduction', propositionActuelle.id), {
+      statut: 'reconduit_modifie',
+      nouveau_montant_mise: nouveauMontant,
+      date_reponse: serverTimestamp(),
+    });
+    afficherMessage('retraitMsg', 'Votre demande de modification a été envoyée au PDG.', 'green');
+  } catch (err) {
+    console.error('Erreur modification montant :', err);
+    afficherMessage('retraitMsg', "Erreur lors de l'envoi de votre demande.", 'red');
+  }
+}
