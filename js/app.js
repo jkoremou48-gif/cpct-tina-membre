@@ -11,6 +11,7 @@ import {
   signOut,
   doc,
   getDoc,
+  updateDoc,
   collection,
   query,
   where,
