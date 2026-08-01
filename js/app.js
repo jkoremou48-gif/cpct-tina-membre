@@ -1,4 +1,4 @@
- // ============================
+// ============================
 // CPCT-TINA — App Membre
 // Logique principale
 // ============================
@@ -38,6 +38,7 @@ let propositionActuelle = null;
 let pretActif = null;
 let contratActifMembre = null;
 let versementsConfirmesMembre = [];
+let contratsTousMembre = [];
 
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
@@ -133,7 +134,12 @@ function ecouterContratsMembre(uid) {
     totalCommissionMembre = snapshot.docs.reduce(
       (s, d) => s + Number(d.data().commission || 0), 0
     );
+    const contrats = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    contratsTousMembre = contrats;
+    contratActifMembre = contrats.find((c) => c.statut === 'actif') || null;
     recalculerSolde();
+    mettreAJourBadgeInactif();
+    mettreAJourContratNonSolde();
   });
 }
 
@@ -149,6 +155,39 @@ function mettreAJourBadgeInactif() {
   const statut = calculerStatutContrat(contratActifMembre, versementsConfirmesMembre);
   badge.classList.toggle('hidden', statut !== 'inactif');
 }
+
+// --- Épargne nette d'un contrat quelconque, à partir des versements confirmés déjà chargés ---
+function calculerEpargneNetteContratLocal(contratId) {
+  return versementsConfirmesMembre
+    .filter((v) => v.contract_id === contratId && v.jour_numero !== 1)
+    .reduce((s, v) => s + Number(v.montant || 0), 0);
+}
+
+// --- Affiche le solde d'un ancien contrat clôturé jamais retiré ---
+function mettreAJourContratNonSolde() {
+  const zone = document.getElementById('contratNonSoldeZone');
+  if (!zone) return;
+
+  const idContratActif = contratActifMembre ? contratActifMembre.id : null;
+  const anciensNonSoldes = contratsTousMembre.filter((c) =>
+    c.statut === 'cloture' && !c.epargne_soldee && c.id !== idContratActif
+  );
+  const totalNonSolde = anciensNonSoldes.reduce(
+    (s, c) => s + Math.max(0, calculerEpargneNetteContratLocal(c.id)), 0
+  );
+
+  if (totalNonSolde > 0) {
+    zone.innerHTML = `
+      <div class="pret-card" style="border-left-color:#c0392b;">
+        <p><strong style="color:#c0392b;">Contrat non soldé</strong></p>
+        <p>Épargne non retirée d'un ancien contrat : <strong>${formatMontant(totalNonSolde)}</strong></p>
+      </div>
+    `;
+  } else {
+    zone.innerHTML = '';
+  }
+}
+
 // --- Écoute en temps réel du prêt actif ---
 function ecouterPretActif(uid) {
   const q = query(
@@ -158,9 +197,8 @@ function ecouterPretActif(uid) {
   );
   onSnapshot(q, (snapshot) => {
     if (snapshot.empty) {
-      list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>';
-      versementsConfirmesMembre = [];
-      mettreAJourBadgeInactif();
+      pretActif = null;
+      afficherPretActif();
       return;
     }
     const d = snapshot.docs[0];
@@ -243,6 +281,7 @@ function ecouterCotisations(uid) {
       list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>';
       versementsConfirmesMembre = [];
       mettreAJourBadgeInactif();
+      mettreAJourContratNonSolde();
       return;
     }
 
@@ -255,6 +294,7 @@ totalConfirmeMembre = docs
     versementsConfirmesMembre = docs.filter((d) => d.statut === 'confirme');
     recalculerSolde();
     mettreAJourBadgeInactif();
+    mettreAJourContratNonSolde();
       docs.forEach((data) => {
         const row = document.createElement('div');
         row.className = 'cotis-row';
