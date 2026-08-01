@@ -40,10 +40,33 @@ function afficherMessage(elementId, texte, couleur) {
   el.style.color = couleur || '#333';
 }
 
+function calculerStatutContrat(contrat, versementsConfirmes) {
+  if (!contrat || contrat.statut !== 'actif') return contrat ? contrat.statut : null;
+
+  const versementsDuContrat = versementsConfirmes.filter((v) => v.contract_id === contrat.id);
+  let dateReference;
+
+  if (versementsDuContrat.length === 0) {
+    dateReference = contrat.date_debut ? new Date(contrat.date_debut) : null;
+  } else {
+    const dernier = versementsDuContrat.reduce((a, b) => {
+      const da = a.date && a.date.toDate ? a.date.toDate() : new Date(a.date || 0);
+      const db = b.date && b.date.toDate ? b.date.toDate() : new Date(b.date || 0);
+      return db > da ? b : a;
+    });
+    dateReference = dernier.date && dernier.date.toDate ? dernier.date.toDate() : new Date(dernier.date);
+  }
+
+  if (!dateReference) return 'actif';
+  const diffJours = Math.floor((new Date() - dateReference) / (1000 * 60 * 60 * 24));
+  return diffJours >= 7 ? 'inactif' : 'actif';
+}
+
 export {
   formatMontant,
   formatDate,
   formatDateHeure,
   badgeStatut,
   afficherMessage,
+  calculerStatutContrat,
 };
