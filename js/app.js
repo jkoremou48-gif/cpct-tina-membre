@@ -27,6 +27,7 @@ import {
   formatDateHeure,
   badgeStatut,
   afficherMessage,
+  calculerStatutContrat,
 } from "./utils.js";
 
 let currentUser = null;
@@ -35,6 +36,8 @@ let totalConfirmeMembre = 0;
 let totalCommissionMembre = 0;
 let propositionActuelle = null;
 let pretActif = null;
+let contratActifMembre = null;
+let versementsConfirmesMembre = [];
 
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
@@ -139,6 +142,13 @@ function recalculerSolde() {
   const solde = totalConfirmeMembre;
   document.getElementById('soldeMembre').textContent = formatMontant(solde > 0 ? solde : 0);
 }
+
+function mettreAJourBadgeInactif() {
+  const badge = document.getElementById('badgeInactif');
+  if (!badge) return;
+  const statut = calculerStatutContrat(contratActifMembre, versementsConfirmesMembre);
+  badge.classList.toggle('hidden', statut !== 'inactif');
+}
 // --- Écoute en temps réel du prêt actif ---
 function ecouterPretActif(uid) {
   const q = query(
@@ -148,8 +158,9 @@ function ecouterPretActif(uid) {
   );
   onSnapshot(q, (snapshot) => {
     if (snapshot.empty) {
-      pretActif = null;
-      afficherPretActif();
+      list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>';
+      versementsConfirmesMembre = [];
+      mettreAJourBadgeInactif();
       return;
     }
     const d = snapshot.docs[0];
