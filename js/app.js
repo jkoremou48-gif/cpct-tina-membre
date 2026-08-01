@@ -241,6 +241,8 @@ function ecouterCotisations(uid) {
 
     if (snapshot.empty) {
       list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>';
+      versementsConfirmesMembre = [];
+      mettreAJourBadgeInactif();
       return;
     }
 
@@ -250,7 +252,9 @@ function ecouterCotisations(uid) {
 totalConfirmeMembre = docs
       .filter((d) => d.statut === 'confirme' && d.jour_numero !== 1)
       .reduce((s, d) => s + Number(d.montant || 0), 0);
+    versementsConfirmesMembre = docs.filter((d) => d.statut === 'confirme');
     recalculerSolde();
+    mettreAJourBadgeInactif();
       docs.forEach((data) => {
         const row = document.createElement('div');
         row.className = 'cotis-row';
