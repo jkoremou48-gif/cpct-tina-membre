@@ -20,6 +20,12 @@ import {
   onSnapshot,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
+import {
+  getStorage,
+  ref,
+  uploadBytes,
+  getDownloadURL,
+} from "https://www.gstatic.com/firebasejs/12.15.0/firebase-storage.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCJkP6sOu-gbZwum8vQVqllFIHgrtUxQMc",
@@ -33,10 +39,20 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig, "membre");
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
+
+// --- Upload d'une photo de profil vers Storage, retourne l'URL publique ---
+async function uploaderPhotoProfil(uid, file) {
+  const chemin = `photos_profil/${uid}.jpg`;
+  const storageRef = ref(storage, chemin);
+  await uploadBytes(storageRef, file);
+  return await getDownloadURL(storageRef);
+}
 
 export {
   auth,
   db,
+  storage,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -52,4 +68,5 @@ export {
   orderBy,
   onSnapshot,
   serverTimestamp,
+  uploaderPhotoProfil,
 };
