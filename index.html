@@ -27,10 +27,15 @@
     .badge.refuse { background: #f8d7da; color: #721c24; }
     #loginError { color: red; margin-top: 8px; font-size: 13px; }
     .pret-card, .proposition-card {
-  background: white; border-radius: 10px; padding: 16px; margin-bottom: 14px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #0d6efd;
-}
-.proposition-card button { margin-top: 8px; }
+      background: white; border-radius: 10px; padding: 16px; margin-bottom: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid #0d6efd;
+    }
+    .proposition-card button { margin-top: 8px; }
+    .avatar-membre { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; background: #ddd; display: block; margin: 0 auto 10px auto; cursor: pointer; }
+    .avatar-label { display: block; text-align: center; font-size: 12px; color: #0d6efd; cursor: pointer; margin-top: -6px; margin-bottom: 10px; }
+    .collapsible-title { cursor: pointer; }
+    .collapsible-title::after { content: " ▾"; font-size: 12px; }
+    .collapsible-title.ouvert::after { content: " ▴"; }
   </style>
 </head>
 <body>
@@ -53,6 +58,9 @@
     <div id="dashboard" class="hidden">
 
       <div class="card">
+        <img id="membre-avatar" class="avatar-membre" src="" alt="Photo de profil" />
+        <label class="avatar-label" for="membre-avatar-input">Changer la photo</label>
+        <input type="file" id="membre-avatar-input" accept="image/*" class="hidden" />
         <strong id="memberName">Membre</strong>
         <span id="badgeInactif" class="hidden" style="color:#c0392b; font-weight:bold; font-size:13px; margin-left:8px;">● Compte inactif</span>
         <div class="solde" id="soldeMembre">0 GNF</div>
@@ -67,11 +75,11 @@
 
       <div id="pretZone"></div>
 
-<div id="contratNonSoldeZone"></div>
+      <div id="contratNonSoldeZone"></div>
 
       <div class="card">
-        <h3>Mes cotisations</h3>
-        <div id="cotisationsList"></div>
+        <h3 class="collapsible-title" id="titre-cotisations">Mes cotisations</h3>
+        <div id="cotisationsList" class="hidden"></div>
       </div>
 
       <div class="card">
@@ -82,8 +90,8 @@
       </div>
 
       <div class="card">
-        <h3>Historique des demandes</h3>
-        <div id="withdrawalHistory"></div>
+        <h3 class="collapsible-title" id="titre-historique-demandes">Historique des demandes</h3>
+        <div id="withdrawalHistory" class="hidden"></div>
       </div>
 
       <button id="logoutBtn" class="secondary">Déconnexion</button>
@@ -91,10 +99,8 @@
 
   </div>
 
-  <script type="module" src="js/firebase-config.js"></script>
-  <script type="module" src="js/utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>eruda.init();</script>
-    <script type="module" src="js/app.js"></script>
+  <script>eruda.init();</script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
