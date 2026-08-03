@@ -189,6 +189,7 @@ function calculerSoldeDisponible() {
   return Math.max(0, epargneNette - pretDu);
 }
 
+// --- Contrat(s) non soldé(s) : informatif uniquement, le retrait se fait via "Demander un retrait" ---
 function mettreAJourContratNonSolde() {
   const zone = document.getElementById('contratNonSoldeZone');
   if (!zone) return;
@@ -202,22 +203,13 @@ function mettreAJourContratNonSolde() {
   );
 
   if (totalNonSolde > 0) {
-    const demandeDejaEnCours = demandesRetraitMembre.some(
-      (d) => d.statut === 'en_attente' && d.type === 'solde_contrat_termine'
-    );
     zone.innerHTML = `
       <div class="pret-card" style="border-left-color:#c0392b;">
         <p><strong style="color:#c0392b;">Contrat(s) non soldé(s)</strong></p>
         <p>Épargne non retirée d'ancien(s) contrat(s) : <strong>${formatMontant(totalNonSolde)}</strong></p>
-        <button id="btn-solder-contrats-anterieurs" ${demandeDejaEnCours ? 'disabled' : ''}>
-          ${demandeDejaEnCours ? 'Demande déjà envoyée, en attente' : 'Solder mes contrats antérieurs'}
-        </button>
+        <p style="font-size:12px; color:#999;">Pour la retirer, tapez ce montant dans "Demander un retrait" ci-dessous.</p>
       </div>
     `;
-    const btn = document.getElementById('btn-solder-contrats-anterieurs');
-    if (btn && !demandeDejaEnCours) {
-      btn.addEventListener('click', () => demanderSoldeContratsAnterieurs(totalNonSolde));
-    }
   } else {
     zone.innerHTML = '';
   }
@@ -480,29 +472,6 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
     afficherMessage('retraitMsg', "Erreur lors de l'envoi de la demande.", 'red');
   }
 });
-
-async function demanderSoldeContratsAnterieurs(montantTotal) {
-  const demandeDejaEnCours = demandesRetraitMembre.some((d) => d.statut === 'en_attente');
-  if (demandeDejaEnCours) {
-    afficherMessage('retraitMsg', 'Vous avez déjà une demande en attente. Attendez son traitement avant d\'en envoyer une nouvelle.', 'red');
-    return;
-  }
-  try {
-    await addDoc(collection(db, 'withdrawalRequests'), {
-      memberId: currentUser.uid,
-      memberName: currentMemberData ? currentMemberData.nom : '',
-      montant: montantTotal,
-      statut: 'en_attente',
-      type: 'solde_contrat_termine',
-      contractId: null,
-      dateCreation: serverTimestamp(),
-    });
-    afficherMessage('retraitMsg', 'Demande de solde de vos anciens contrats envoyée. En attente de validation du PDG.', 'green');
-  } catch (err) {
-    console.error('Erreur demande de solde :', err);
-    afficherMessage('retraitMsg', "Erreur lors de l'envoi de la demande.", 'red');
-  }
-}
 
 async function repondreProposition(choix) {
   if (!propositionActuelle) return;
