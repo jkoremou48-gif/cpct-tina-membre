@@ -1,8 +1,3 @@
-// ============================
-// CPCT-TINA — App Membre
-// Logique principale
-// ============================
-
 import {
   auth,
   db,
@@ -15,10 +10,10 @@ import {
   collection,
   query,
   where,
-  orderBy,
   onSnapshot,
   addDoc,
   serverTimestamp,
+  uploaderPhotoProfil,
 } from "./firebase-config.js";
 
 import {
@@ -30,6 +25,8 @@ import {
   calculerStatutContrat,
 } from "./utils.js";
 
+const AVATAR_DEFAUT = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='56'><rect width='56' height='56' fill='%23ddd'/></svg>";
+
 let currentUser = null;
 let currentMemberData = null;
 let totalConfirmeMembre = 0;
@@ -40,6 +37,7 @@ let contratActifMembre = null;
 let versementsConfirmesMembre = [];
 let contratsTousMembre = [];
 let demandesRetraitMembre = [];
+let tousPaiementsMembre = [];
 
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
@@ -70,12 +68,10 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
   }
 });
 
-// --- Déconnexion ---
 document.getElementById('logoutBtn').addEventListener('click', async () => {
   await signOut(auth);
 });
 
-// --- Surveillance de l'état de connexion ---
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     currentUser = user;
@@ -92,7 +88,22 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
-// --- Chargement des données du membre ---
+// --- Photo de profil ---
+document.getElementById('membre-avatar-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file || !currentUser) return;
+  try {
+    const url = await uploaderPhotoProfil(currentUser.uid, file);
+    await updateDoc(doc(db, 'users', currentUser.uid), { photoURL: url });
+    if (currentMemberData) currentMemberData.photoURL = url;
+    document.getElementById('membre-avatar').src = url;
+    afficherMessage('retraitMsg', 'Photo de profil mise à jour.', 'green');
+  } catch (err) {
+    console.error(err);
+    afficherMessage('retraitMsg', "Erreur lors de l'envoi de la photo : " + err.message, 'red');
+  }
+});
+
 async function chargerDonneesMembre(uid) {
   try {
     const memberRef = doc(db, 'users', uid);
@@ -101,6 +112,7 @@ async function chargerDonneesMembre(uid) {
     if (memberSnap.exists()) {
       currentMemberData = memberSnap.data();
       document.getElementById('memberName').textContent = currentMemberData.nom || 'Membre';
+      document.getElementById('membre-avatar').src = currentMemberData.photoURL || AVATAR_DEFAUT;
 
       if (currentMemberData.parrain_id) {
         const collecteurSnap = await getDoc(doc(db, 'users', currentMemberData.parrain_id));
@@ -112,6 +124,7 @@ async function chargerDonneesMembre(uid) {
       }
     } else {
       document.getElementById('memberName').textContent = 'Membre';
+      document.getElementById('membre-avatar').src = AVATAR_DEFAUT;
     }
     ecouterCotisations(uid);
     ecouterContratsMembre(uid);
@@ -124,7 +137,6 @@ async function chargerDonneesMembre(uid) {
   }
 }
 
-// --- Écoute en temps réel des contrats + calcul du solde ---
 function ecouterContratsMembre(uid) {
   const q = query(
     collection(db, 'contracts'),
@@ -138,7 +150,7 @@ function ecouterContratsMembre(uid) {
     const contrats = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
     contratsTousMembre = contrats;
     contratActifMembre = contrats.find((c) => c.statut === 'actif') || null;
-    recalculerSolde();
+    rafraichirCotisations();
     mettreAJourBadgeInactif();
     mettreAJourContratNonSolde();
   });
@@ -157,31 +169,26 @@ function mettreAJourBadgeInactif() {
   badge.classList.toggle('hidden', statut !== 'inactif');
 }
 
-// --- Épargne nette d'un contrat quelconque, à partir des versements confirmés déjà chargés ---
 function calculerEpargneNetteContratLocal(contratId) {
   return versementsConfirmesMembre
     .filter((v) => v.contract_id === contratId && v.jour_numero !== 1)
     .reduce((s, v) => s + Number(v.montant || 0), 0);
 }
 
-// --- Montant dû actuellement sur le prêt actif (capital + intérêts 2%/semaine entamée) ---
 function calculerMontantDuPretActif() {
   if (!pretActif) return 0;
   const dateDebut = pretActif.date_debut && pretActif.date_debut.toDate ? pretActif.date_debut.toDate() : new Date();
-  const nbSemaines = Math.floor((new Date() - dateDebut) / (1000 * 60 * 60 * 24 * 7)) + 1; // 1re semaine facturée dès la validation
+  const nbSemaines = Math.floor((new Date() - dateDebut) / (1000 * 60 * 60 * 24 * 7)) + 1;
   const montantDuBrut = pretActif.montant_initial * (1 + pretActif.taux_hebdo * nbSemaines);
   return Math.max(0, montantDuBrut);
 }
 
-// --- Solde disponible = épargne nette du contrat en cours - prêt actif non remboursé ---
-// (le prêt ne réduit jamais l'épargne nette elle-même, seulement ce qui reste disponible au retrait)
 function calculerSoldeDisponible() {
   const epargneNette = contratActifMembre ? calculerEpargneNetteContratLocal(contratActifMembre.id) : 0;
   const pretDu = calculerMontantDuPretActif();
   return Math.max(0, epargneNette - pretDu);
 }
 
-// --- Affiche le solde d'un ancien contrat clôturé jamais retiré + bouton pour le solder ---
 function mettreAJourContratNonSolde() {
   const zone = document.getElementById('contratNonSoldeZone');
   if (!zone) return;
@@ -216,7 +223,6 @@ function mettreAJourContratNonSolde() {
   }
 }
 
-// --- Écoute en temps réel du prêt actif ---
 function ecouterPretActif(uid) {
   const q = query(
     collection(db, 'prets'),
@@ -227,11 +233,13 @@ function ecouterPretActif(uid) {
     if (snapshot.empty) {
       pretActif = null;
       afficherPretActif();
+      recalculerSolde();
       return;
     }
     const d = snapshot.docs[0];
     pretActif = { id: d.id, ...d.data() };
     afficherPretActif();
+    recalculerSolde();
   });
 }
 
@@ -253,7 +261,6 @@ function afficherPretActif() {
   `;
 }
 
-// --- Écoute en temps réel de la proposition de reconduction ---
 function ecouterPropositionReconduction(uid) {
   const q = query(
     collection(db, 'propositions_reconduction'),
@@ -293,7 +300,6 @@ function afficherPropositionReconduction() {
   document.getElementById('btn-refuser-reconduction').addEventListener('click', () => repondreProposition('refuse'));
 }
 
-// --- Écoute en temps réel des cotisations ---
 function ecouterCotisations(uid) {
   const q = query(
     collection(db, 'payments'),
@@ -301,42 +307,50 @@ function ecouterCotisations(uid) {
   );
 
   onSnapshot(q, (snapshot) => {
-    const list = document.getElementById('cotisationsList');
-    list.innerHTML = '';
-
-    if (snapshot.empty) {
-      list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>';
-      versementsConfirmesMembre = [];
-      mettreAJourBadgeInactif();
-      mettreAJourContratNonSolde();
-      return;
-    }
-
-    const docs = snapshot.docs
-      .map((d) => d.data())
-      .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
-
-    totalConfirmeMembre = docs
-      .filter((d) => d.statut === 'confirme' && d.jour_numero !== 1)
-      .reduce((s, d) => s + Number(d.montant || 0), 0);
-    versementsConfirmesMembre = docs.filter((d) => d.statut === 'confirme');
-    recalculerSolde();
+    tousPaiementsMembre = snapshot.docs.map((d) => d.data());
+    versementsConfirmesMembre = tousPaiementsMembre.filter((d) => d.statut === 'confirme');
+    rafraichirCotisations();
     mettreAJourBadgeInactif();
     mettreAJourContratNonSolde();
-
-    docs.forEach((data) => {
-      const row = document.createElement('div');
-      row.className = 'cotis-row';
-      row.innerHTML = `
-        <span>${formatDate(data.date)}</span>
-        <span>${formatMontant(data.montant)}</span>
-      `;
-      list.appendChild(row);
-    });
   });
 }
 
-// --- Libellé lisible du type de demande de retrait ---
+function rafraichirCotisations() {
+  const list = document.getElementById('cotisationsList');
+
+  if (!contratActifMembre) {
+    totalConfirmeMembre = 0;
+    list.innerHTML = '<p style="color:#999; font-size:13px;">Aucun contrat en cours.</p>';
+    recalculerSolde();
+    return;
+  }
+
+  const docsDuContrat = tousPaiementsMembre
+    .filter((d) => d.contract_id === contratActifMembre.id)
+    .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
+
+  totalConfirmeMembre = docsDuContrat
+    .filter((d) => d.statut === 'confirme' && d.jour_numero !== 1)
+    .reduce((s, d) => s + Number(d.montant || 0), 0);
+  recalculerSolde();
+
+  if (docsDuContrat.length === 0) {
+    list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  docsDuContrat.forEach((data) => {
+    const row = document.createElement('div');
+    row.className = 'cotis-row';
+    row.innerHTML = `
+      <span>${formatDate(data.date)}</span>
+      <span>${formatMontant(data.montant)}</span>
+    `;
+    list.appendChild(row);
+  });
+}
+
 function libelleTypeRetrait(type) {
   const labels = {
     'pret': 'Prêt (en cours de contrat)',
@@ -346,7 +360,6 @@ function libelleTypeRetrait(type) {
   return labels[type] || 'Retrait';
 }
 
-// --- Écoute en temps réel de l'historique des demandes de retrait ---
 function ecouterHistoriqueRetraits(uid) {
   const q = query(
     collection(db, 'withdrawalRequests'),
@@ -381,8 +394,6 @@ function ecouterHistoriqueRetraits(uid) {
   });
 }
 
-// --- Évalue le cas applicable à une demande de retrait (Cas 1 à 4) ---
-// Retourne { decision: 'rejet'|'accepte', type, message, contratId }
 function evaluerCasRetrait(montant) {
   if (!contratActifMembre) {
     return { decision: 'rejet', message: "Vous n'avez aucun contrat en cours." };
@@ -420,7 +431,6 @@ function evaluerCasRetrait(montant) {
     };
   }
 
-  // Tout retrait partiel en cours de contrat est un prêt à 2%/semaine, validé par le PDG
   return {
     decision: 'accepte',
     type: 'pret',
@@ -429,7 +439,6 @@ function evaluerCasRetrait(montant) {
   };
 }
 
-// --- Demande de retrait (bouton principal) ---
 document.getElementById('demandeRetraitBtn').addEventListener('click', async () => {
   const montantInput = document.getElementById('montantRetrait');
   const montant = parseFloat(montantInput.value);
@@ -472,7 +481,6 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
   }
 });
 
-// --- Demande de solde des contrats antérieurs (bouton dédié) ---
 async function demanderSoldeContratsAnterieurs(montantTotal) {
   const demandeDejaEnCours = demandesRetraitMembre.some((d) => d.statut === 'en_attente');
   if (demandeDejaEnCours) {
@@ -496,7 +504,6 @@ async function demanderSoldeContratsAnterieurs(montantTotal) {
   }
 }
 
-// --- Réponse à une proposition de reconduction ---
 async function repondreProposition(choix) {
   if (!propositionActuelle) return;
   try {
@@ -511,7 +518,6 @@ async function repondreProposition(choix) {
   }
 }
 
-// --- Demande de reconduction avec modification du montant ---
 function ouvrirModificationMontant() {
   const nouveauMontant = prompt('Quel nouveau montant de versement quotidien souhaitez-vous ? (GNF)');
   if (nouveauMontant === null) return;
@@ -537,3 +543,13 @@ async function enregistrerModificationMontant(nouveauMontant) {
     afficherMessage('retraitMsg', "Erreur lors de l'envoi de votre demande.", 'red');
   }
 }
+
+// --- Dépliants ---
+document.getElementById('titre-cotisations').addEventListener('click', () => {
+  document.getElementById('cotisationsList').classList.toggle('hidden');
+  document.getElementById('titre-cotisations').classList.toggle('ouvert');
+});
+document.getElementById('titre-historique-demandes').addEventListener('click', () => {
+  document.getElementById('withdrawalHistory').classList.toggle('hidden');
+  document.getElementById('titre-historique-demandes').classList.toggle('ouvert');
+});
