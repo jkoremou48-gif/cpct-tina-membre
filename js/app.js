@@ -144,9 +144,9 @@ function ecouterContratsMembre(uid) {
   });
 }
 
-// --- Recalcule et affiche le solde du membre ---
 function recalculerSolde() {
-  const solde = totalConfirmeMembre;
+  const pretDu = calculerMontantDuPretActif();
+  const solde = totalConfirmeMembre - pretDu;
   document.getElementById('soldeMembre').textContent = formatMontant(solde > 0 ? solde : 0);
 }
 
