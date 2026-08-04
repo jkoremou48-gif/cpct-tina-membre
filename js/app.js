@@ -248,7 +248,7 @@ function afficherPretActif() {
       <p><strong>Prêt en cours</strong></p>
       <p>Capital emprunté : ${formatMontant(pretActif.montant_initial)}</p>
       <p>Montant dû actuellement (2%/semaine) : <strong>${formatMontant(montantDu)}</strong></p>
-      <p style="font-size:12px; color:#999;">Ce montant est déduit de votre solde disponible au retrait, mais pas de votre épargne totale.</p>
+      <p style="font-size:12px; color:#c0392b;">Aucune nouvelle demande de prêt ou de retrait n'est possible tant que ce prêt n'est pas totalement remboursé.</p>
     </div>
   `;
 }
@@ -387,6 +387,16 @@ function ecouterHistoriqueRetraits(uid) {
 }
 
 function evaluerCasRetrait(montant) {
+  // Règle absolue : tant qu'un prêt actif n'est pas totalement remboursé (capital + intérêt),
+  // aucune nouvelle demande de retrait ou de prêt n'est autorisée, quel que soit le montant.
+  if (pretActif) {
+    const montantDu = calculerMontantDuPretActif();
+    return {
+      decision: 'rejet',
+      message: `Vous avez déjà un prêt en cours (${formatMontant(montantDu)} dû). Aucune nouvelle demande de retrait ou de prêt n'est possible tant qu'il n'est pas totalement remboursé.`,
+    };
+  }
+
   if (!contratActifMembre) {
     return { decision: 'rejet', message: "Vous n'avez aucun contrat en cours." };
   }
