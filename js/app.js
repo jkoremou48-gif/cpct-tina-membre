@@ -14,6 +14,7 @@ import {
   addDoc,
   serverTimestamp,
   uploaderPhotoProfil,
+  changerMotDePasse,
 } from "./firebase-config.js";
 
 import {
@@ -80,6 +81,7 @@ onAuthStateChanged(auth, async (user) => {
     await chargerDonneesMembre(user.uid);
     loading.classList.add('hidden');
     dashboard.classList.remove('hidden');
+    ajouterBoutonChangerMotDePasse();
   } else {
     currentUser = null;
     dashboard.classList.add('hidden');
@@ -103,6 +105,98 @@ document.getElementById('membre-avatar-input').addEventListener('change', async 
     afficherMessage('retraitMsg', "Erreur lors de l'envoi de la photo : " + err.message, 'red');
   }
 });
+
+// --- Changement de mot de passe ---
+function ajouterBoutonChangerMotDePasse() {
+  if (document.getElementById('btn-changer-mdp')) return;
+  const btnLogout = document.getElementById('logoutBtn');
+  if (!btnLogout) return;
+  btnLogout.insertAdjacentHTML(
+    'beforebegin',
+    `<button type="button" id="btn-changer-mdp" style="width:auto; margin-right:8px;">Changer mon mot de passe</button>`
+  );
+  document.getElementById('btn-changer-mdp').addEventListener('click', ouvrirChangementMotDePasse);
+}
+
+function ouvrirChangementMotDePasseModal(html) {
+  let overlay = document.getElementById('modal-overlay-mdp');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'modal-overlay-mdp';
+    Object.assign(overlay.style, {
+      position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+      background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', zIndex: 1000,
+    });
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => {
+      if (e.target.id === 'modal-overlay-mdp') overlay.remove();
+    });
+  }
+  const carte = document.createElement('div');
+  Object.assign(carte.style, {
+    background: 'white', borderRadius: '12px', padding: '24px',
+    width: '85%', maxWidth: '350px',
+  });
+  carte.innerHTML = html;
+  overlay.innerHTML = '';
+  overlay.appendChild(carte);
+  return overlay;
+}
+
+function ouvrirChangementMotDePasse() {
+  const overlay = ouvrirChangementMotDePasseModal(`
+    <h2 style="color:#0d6efd;">Changer mon mot de passe</h2>
+    <p style="color:#666; font-size:13px; margin-bottom:12px;">Confirmez votre mot de passe actuel puis saisissez le nouveau.</p>
+    <form id="form-changer-mdp">
+      <label style="display:block; margin-bottom:10px;">Mot de passe actuel
+        <input type="password" name="ancien" required style="width:100%; margin-top:4px;" />
+      </label>
+      <label style="display:block; margin-bottom:10px;">Nouveau mot de passe (6 caractères min)
+        <input type="password" name="nouveau" minlength="6" required style="width:100%; margin-top:4px;" />
+      </label>
+      <label style="display:block; margin-bottom:14px;">Confirmer le nouveau mot de passe
+        <input type="password" name="confirmation" minlength="6" required style="width:100%; margin-top:4px;" />
+      </label>
+      <div id="changer-mdp-msg" style="font-size:13px; margin-bottom:10px;"></div>
+      <div style="display:flex; gap:8px;">
+        <button type="button" id="btn-annuler-mdp" style="flex:1;">Annuler</button>
+        <button type="submit" style="flex:1;">Confirmer</button>
+      </div>
+    </form>
+  `);
+  document.getElementById('btn-annuler-mdp').addEventListener('click', () => overlay.remove());
+  document.getElementById('form-changer-mdp').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const ancien = fd.get('ancien');
+    const nouveau = fd.get('nouveau');
+    const confirmation = fd.get('confirmation');
+    const msgZone = document.getElementById('changer-mdp-msg');
+
+    if (nouveau !== confirmation) {
+      msgZone.textContent = 'Les deux mots de passe ne correspondent pas.';
+      msgZone.style.color = 'red';
+      return;
+    }
+
+    try {
+      const emailTechnique = telephoneVersEmailTechnique(currentMemberData.telephone);
+      await changerMotDePasse(emailTechnique, ancien, nouveau);
+      msgZone.textContent = 'Mot de passe modifié avec succès.';
+      msgZone.style.color = 'green';
+      setTimeout(() => overlay.remove(), 1200);
+    } catch (err) {
+      console.error(err);
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        msgZone.textContent = 'Mot de passe actuel incorrect.';
+      } else {
+        msgZone.textContent = 'Erreur : ' + err.message;
+      }
+      msgZone.style.color = 'red';
+    }
+  });
+}
 
 async function chargerDonneesMembre(uid) {
   try {
