@@ -5,6 +5,9 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
 } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
 import {
   getFirestore,
@@ -49,6 +52,13 @@ async function uploaderPhotoProfil(uid, file) {
   return await getDownloadURL(storageRef);
 }
 
+// --- Changer le mot de passe de l'utilisateur connecté (ré-authentification requise) ---
+async function changerMotDePasse(email, ancienMotDePasse, nouveauMotDePasse) {
+  const credential = EmailAuthProvider.credential(email, ancienMotDePasse);
+  await reauthenticateWithCredential(auth.currentUser, credential);
+  await updatePassword(auth.currentUser, nouveauMotDePasse);
+}
+
 export {
   auth,
   db,
@@ -69,4 +79,5 @@ export {
   onSnapshot,
   serverTimestamp,
   uploaderPhotoProfil,
+  changerMotDePasse,
 };
