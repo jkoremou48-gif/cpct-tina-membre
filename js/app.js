@@ -514,7 +514,7 @@ function evaluerCasRetrait(montant) {
       decision: 'accepte',
       type: 'solde_contrat_termine',
       contratId: contratActifMembre.id,
-      message: 'Demande envoyée : ce retrait sera traité comme un solde de contrat terminé.',
+      message: 'Demande envoyée à votre collecteur : ce retrait sera traité comme un solde de contrat terminé.',
     };
   }
 
@@ -523,7 +523,7 @@ function evaluerCasRetrait(montant) {
       decision: 'accepte',
       type: 'retrait_final',
       contratId: contratActifMembre.id,
-      message: 'Demande envoyée : ce retrait clôturera votre contrat en cours si le PDG la confirme.',
+      message: 'Demande envoyée à votre collecteur : ce retrait clôturera votre contrat en cours si votre collecteur la confirme.',
     };
   }
 
@@ -531,7 +531,7 @@ function evaluerCasRetrait(montant) {
     decision: 'accepte',
     type: 'pret',
     contratId: contratActifMembre.id,
-    message: 'Demande envoyée : ce retrait sera traité comme un prêt à 2%/semaine, en attente de validation du PDG.',
+    message: 'Demande envoyée à votre collecteur : ce retrait sera traité comme un prêt à 2%/semaine, en attente de sa validation.',
   };
 }
 
@@ -543,6 +543,11 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
 
   if (!montant || montant <= 0) {
     afficherMessage('retraitMsg', 'Veuillez entrer un montant valide.', 'red');
+    return;
+  }
+
+  if (!currentMemberData || !currentMemberData.parrain_id) {
+    afficherMessage('retraitMsg', "Aucun collecteur n'est rattaché à votre compte. Contactez le PDG.", 'red');
     return;
   }
 
@@ -563,6 +568,9 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
     await addDoc(collection(db, 'withdrawalRequests'), {
       memberId: currentUser.uid,
       memberName: currentMemberData ? currentMemberData.nom : '',
+      // Chantier "autonomie collecteur" (13 août 2026) : la demande est routée
+      // directement vers le collecteur du membre, qui la confirme ou l'annule.
+      collecteur_id: currentMemberData.parrain_id,
       montant: montant,
       statut: 'en_attente',
       type: resultat.type,
