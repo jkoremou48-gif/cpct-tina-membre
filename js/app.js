@@ -283,18 +283,26 @@ function calculerSoldeDisponible() {
   return Math.max(0, epargneNette - pretDu);
 }
 
+// --- Calcul du solde des anciens contrats clôturés, non encore soldés ---
+// Réutilisé à la fois par l'affichage informatif ET par evaluerCasRetrait(),
+// pour éviter toute divergence entre ce qui est affiché et ce qui est réellement autorisé.
+function calculerAnciensContratsNonSoldes() {
+  const idContratActif = contratActifMembre ? contratActifMembre.id : null;
+  const anciensNonSoldes = contratsTousMembre.filter((c) =>
+    c.statut === 'cloture' && !c.epargne_soldee && c.id !== idContratActif
+  );
+  const total = anciensNonSoldes.reduce(
+    (s, c) => s + Math.max(0, calculerEpargneNetteContratLocal(c.id)), 0
+  );
+  return { anciensNonSoldes, total };
+}
+
 // --- Contrat(s) non soldé(s) : informatif uniquement, le retrait se fait via "Demander un retrait" ---
 function mettreAJourContratNonSolde() {
   const zone = document.getElementById('contratNonSoldeZone');
   if (!zone) return;
 
-  const idContratActif = contratActifMembre ? contratActifMembre.id : null;
-  const anciensNonSoldes = contratsTousMembre.filter((c) =>
-    c.statut === 'cloture' && !c.epargne_soldee && c.id !== idContratActif
-  );
-  const totalNonSolde = anciensNonSoldes.reduce(
-    (s, c) => s + Math.max(0, calculerEpargneNetteContratLocal(c.id)), 0
-  );
+  const { total: totalNonSolde } = calculerAnciensContratsNonSoldes();
 
   if (totalNonSolde > 0) {
     zone.innerHTML = `
@@ -342,7 +350,7 @@ function afficherPretActif() {
       <p><strong>Prêt en cours</strong></p>
       <p>Capital emprunté : ${formatMontant(pretActif.montant_initial)}</p>
       <p>Montant dû actuellement (2%/semaine) : <strong>${formatMontant(montantDu)}</strong></p>
-      <p style="font-size:12px; color:#c0392b;">Aucune nouvelle demande de prêt ou de retrait n'est possible tant que ce prêt n'est pas totalement remboursé.</p>
+      <p style="font-size:12px; color:#c0392b;">Aucune nouvelle demande de retrait ou de prêt n'est possible tant que ce prêt n'est pas totalement remboursé.</p>
     </div>
   `;
 }
@@ -480,6 +488,17 @@ function ecouterHistoriqueRetraits(uid) {
   });
 }
 
+// --- CORRECTIF (21 août 2026) ---
+// Bug : un membre SANS contrat actif (uniquement un ancien contrat clôturé non soldé)
+// se voyait systématiquement rejeté avec "Vous n'avez aucun contrat en cours.",
+// car ce test intervenait avant même le calcul du solde des anciens contrats non soldés.
+// Résultat : impossible de demander le retrait d'une épargne d'ancien contrat
+// une fois le contrat actif terminé/absent, alors que le message affiché à l'écran
+// invite justement à le faire via "Demander un retrait".
+//
+// Correction : le solde des anciens contrats non soldés est désormais calculé AVANT
+// le test d'absence de contrat actif, et un cas dédié gère la demande de retrait
+// de ce solde même sans contrat actif.
 function evaluerCasRetrait(montant) {
   // Règle absolue : tant qu'un prêt actif n'est pas totalement remboursé (capital + intérêt),
   // aucune nouvelle demande de retrait ou de prêt n'est autorisée, quel que soit le montant.
@@ -491,17 +510,27 @@ function evaluerCasRetrait(montant) {
     };
   }
 
+  const { anciensNonSoldes, total: ancienSolde } = calculerAnciensContratsNonSoldes();
+
+  // Cas 1 : pas de contrat actif. Seul un retrait sur le solde d'anciens contrats
+  // non soldés est envisageable.
   if (!contratActifMembre) {
-    return { decision: 'rejet', message: "Vous n'avez aucun contrat en cours." };
+    if (ancienSolde === 0) {
+      return { decision: 'rejet', message: "Vous n'avez aucun contrat en cours." };
+    }
+    if (montant > ancienSolde) {
+      return { decision: 'rejet', message: `Retrait impossible : votre ancien solde non soldé (${formatMontant(ancienSolde)}) est insuffisant pour couvrir ce montant.` };
+    }
+    return {
+      decision: 'accepte',
+      type: 'solde_contrat_termine',
+      contratId: anciensNonSoldes.length > 0 ? anciensNonSoldes[0].id : null,
+      message: 'Demande envoyée à votre collecteur : ce retrait sera traité comme un solde de contrat terminé.',
+    };
   }
 
+  // Cas 2 : contrat actif présent (logique inchangée)
   const epargneNette = calculerEpargneNetteContratLocal(contratActifMembre.id);
-  const anciensNonSoldes = contratsTousMembre.filter((c) =>
-    c.statut === 'cloture' && !c.epargne_soldee && c.id !== contratActifMembre.id
-  );
-  const ancienSolde = anciensNonSoldes.reduce(
-    (s, c) => s + Math.max(0, calculerEpargneNetteContratLocal(c.id)), 0
-  );
 
   if (montant > epargneNette) {
     if (ancienSolde === 0) {
