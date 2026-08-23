@@ -39,6 +39,8 @@ let versementsConfirmesMembre = [];
 let contratsTousMembre = [];
 let demandesRetraitMembre = [];
 let tousPaiementsMembre = [];
+let diffusionsMembre = [];
+let mesMessagesPdgMembre = [];
 
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
@@ -225,6 +227,8 @@ async function chargerDonneesMembre(uid) {
     ecouterHistoriqueRetraits(uid);
     ecouterPretActif(uid);
     ecouterPropositionReconduction(uid);
+    ecouterDiffusionsMembre();
+    ecouterMessagesPdgMembre(uid);
 
   } catch (err) {
     console.error('Erreur chargement membre :', err);
@@ -284,8 +288,6 @@ function calculerSoldeDisponible() {
 }
 
 // --- Calcul du solde des anciens contrats clôturés, non encore soldés ---
-// Réutilisé à la fois par l'affichage informatif ET par evaluerCasRetrait(),
-// pour éviter toute divergence entre ce qui est affiché et ce qui est réellement autorisé.
 function calculerAnciensContratsNonSoldes() {
   const idContratActif = contratActifMembre ? contratActifMembre.id : null;
   const anciensNonSoldes = contratsTousMembre.filter((c) =>
@@ -489,19 +491,7 @@ function ecouterHistoriqueRetraits(uid) {
 }
 
 // --- CORRECTIF (21 août 2026) ---
-// Bug : un membre SANS contrat actif (uniquement un ancien contrat clôturé non soldé)
-// se voyait systématiquement rejeté avec "Vous n'avez aucun contrat en cours.",
-// car ce test intervenait avant même le calcul du solde des anciens contrats non soldés.
-// Résultat : impossible de demander le retrait d'une épargne d'ancien contrat
-// une fois le contrat actif terminé/absent, alors que le message affiché à l'écran
-// invite justement à le faire via "Demander un retrait".
-//
-// Correction : le solde des anciens contrats non soldés est désormais calculé AVANT
-// le test d'absence de contrat actif, et un cas dédié gère la demande de retrait
-// de ce solde même sans contrat actif.
 function evaluerCasRetrait(montant) {
-  // Règle absolue : tant qu'un prêt actif n'est pas totalement remboursé (capital + intérêt),
-  // aucune nouvelle demande de retrait ou de prêt n'est autorisée, quel que soit le montant.
   if (pretActif) {
     const montantDu = calculerMontantDuPretActif();
     return {
@@ -512,8 +502,6 @@ function evaluerCasRetrait(montant) {
 
   const { anciensNonSoldes, total: ancienSolde } = calculerAnciensContratsNonSoldes();
 
-  // Cas 1 : pas de contrat actif. Seul un retrait sur le solde d'anciens contrats
-  // non soldés est envisageable.
   if (!contratActifMembre) {
     if (ancienSolde === 0) {
       return { decision: 'rejet', message: "Vous n'avez aucun contrat en cours." };
@@ -529,7 +517,6 @@ function evaluerCasRetrait(montant) {
     };
   }
 
-  // Cas 2 : contrat actif présent (logique inchangée)
   const epargneNette = calculerEpargneNetteContratLocal(contratActifMembre.id);
 
   if (montant > epargneNette) {
@@ -597,8 +584,6 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
     await addDoc(collection(db, 'withdrawalRequests'), {
       memberId: currentUser.uid,
       memberName: currentMemberData ? currentMemberData.nom : '',
-      // Chantier "autonomie collecteur" (13 août 2026) : la demande est routée
-      // directement vers le collecteur du membre, qui la confirme ou l'annule.
       collecteur_id: currentMemberData.parrain_id,
       montant: montant,
       statut: 'en_attente',
@@ -653,6 +638,112 @@ async function enregistrerModificationMontant(nouveauMontant) {
     afficherMessage('retraitMsg', "Erreur lors de l'envoi de votre demande.", 'red');
   }
 }
+
+// ==========================================================
+// --- Communication : diffusions du PDG (membres) + conversation privée ---
+// ==========================================================
+
+function ecouterDiffusionsMembre() {
+  const q = query(collection(db, 'diffusions'), where('groupe_cible', '==', 'membres'));
+  onSnapshot(q, (snapshot) => {
+    diffusionsMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderDiffusionsMembre();
+  });
+}
+
+function renderDiffusionsMembre() {
+  const container = document.getElementById('diffusionsMembreList');
+  if (!container) return;
+
+  const diffusionsTriees = [...diffusionsMembre].sort(
+    (a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0)
+  );
+
+  if (diffusionsTriees.length === 0) {
+    container.innerHTML = '<p style="color:#999; font-size:13px;">Aucun message du PDG pour le moment.</p>';
+    return;
+  }
+
+  container.innerHTML = diffusionsTriees.slice(0, 10).map((d) => `
+    <div style="background:#f4f6f8; border-radius:8px; padding:10px; margin-bottom:8px;">
+      <p style="font-size:13px;">${d.contenu}</p>
+      <p style="font-size:11px; color:#999; margin-top:4px;">${formatDateHeure(d.date)}</p>
+    </div>
+  `).join('');
+}
+
+function ecouterMessagesPdgMembre(uid) {
+  const q = query(collection(db, 'messages_prives'), where('participant_id', '==', uid));
+  onSnapshot(q, (snapshot) => {
+    mesMessagesPdgMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderFilPdgMembre();
+  });
+}
+
+function renderFilPdgMembre() {
+  const container = document.getElementById('filPdgMessagesMembre');
+  const badge = document.getElementById('badgeMessagesNonLusMembre');
+  if (!container) return;
+
+  const messages = [...mesMessagesPdgMembre].sort(
+    (a, b) => (a.date?.toMillis?.() || 0) - (b.date?.toMillis?.() || 0)
+  );
+
+  if (messages.length === 0) {
+    container.innerHTML = '<p style="color:#999; font-size:13px;">Aucun échange pour le moment. Écrivez au PDG ci-dessous.</p>';
+  } else {
+    container.innerHTML = messages.map((m) => `
+      <div style="align-self:${m.expediteur_role === 'membre' ? 'flex-end' : 'flex-start'}; background:${m.expediteur_role === 'membre' ? '#0d6efd' : '#f0f0f0'}; color:${m.expediteur_role === 'membre' ? 'white' : '#222'}; border-radius:10px; padding:8px 12px; max-width:80%;">
+        <p style="font-size:14px;">${m.contenu}</p>
+        <p style="font-size:11px; opacity:0.7; margin-top:4px;">${formatDateHeure(m.date)}</p>
+      </div>
+    `).join('');
+    container.scrollTop = container.scrollHeight;
+  }
+
+  const nonLus = messages.filter((m) => m.expediteur_role === 'pdg' && m.lu_participant === false);
+  if (badge) {
+    if (nonLus.length > 0) {
+      badge.textContent = nonLus.length;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  }
+
+  nonLus.forEach(async (m) => {
+    try {
+      await updateDoc(doc(db, 'messages_prives', m.id), { lu_participant: true });
+    } catch (err) {
+      console.error(err);
+    }
+  });
+}
+
+document.getElementById('form-message-pdg-membre').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const contenu = fd.get('contenu').trim();
+  if (!contenu || !currentMemberData) return;
+
+  try {
+    await addDoc(collection(db, 'messages_prives'), {
+      participant_id: currentUser.uid,
+      participant_nom: currentMemberData.nom,
+      participant_role: 'membre',
+      expediteur_id: currentUser.uid,
+      expediteur_role: 'membre',
+      contenu,
+      date: serverTimestamp(),
+      lu_pdg: false,
+      lu_participant: true,
+    });
+    e.target.reset();
+  } catch (err) {
+    console.error(err);
+    afficherMessage('retraitMsg', "Erreur lors de l'envoi du message : " + err.message, 'red');
+  }
+});
 
 // --- Dépliants ---
 document.getElementById('titre-cotisations').addEventListener('click', () => {
