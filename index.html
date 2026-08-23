@@ -13,7 +13,7 @@
     header h1 { font-size: 20px; }
     .container { padding: 16px; max-width: 480px; margin: 0 auto; }
     .card { background: white; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    input, select, button { width: 100%; padding: 12px; margin-top: 8px; border-radius: 8px; border: 1px solid #ccc; font-size: 15px; }
+    input, select, button, textarea { width: 100%; padding: 12px; margin-top: 8px; border-radius: 8px; border: 1px solid #ccc; font-size: 15px; font-family: inherit; }
     button { background: #0d6efd; color: white; border: none; font-weight: bold; margin-top: 14px; }
     button.secondary { background: #eee; color: #333; }
     .hidden { display: none; }
@@ -69,6 +69,22 @@
           Mon collecteur : <strong id="collecteurNom"></strong><br>
           Téléphone : <span id="collecteurTelephone"></span>
         </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3>Communication</h3>
+          <span id="badgeMessagesNonLusMembre" class="badge en-attente hidden" style="width:auto;">0</span>
+        </div>
+        <p style="color:#666; font-size:13px; margin-top:4px;">Messages diffusés par le PDG à tous les membres :</p>
+        <div id="diffusionsMembreList" style="margin-top:8px;"></div>
+        <hr style="margin:14px 0; border:none; border-top:1px solid #eee;">
+        <p style="font-weight:bold; margin-bottom:6px;">Ma conversation avec le PDG</p>
+        <div id="filPdgMessagesMembre" style="max-height:240px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; margin-bottom:6px;"></div>
+        <form id="form-message-pdg-membre">
+          <textarea name="contenu" rows="2" placeholder="Écrire au PDG..." required></textarea>
+          <button type="submit">Envoyer</button>
+        </form>
       </div>
 
       <div id="propositionZone"></div>
