@@ -35,7 +35,7 @@ let totalCommissionMembre = 0;
 let propositionActuelle = null;
 let pretActif = null;
 let contratActifMembre = null;
-let versementsConfirmesMembre = [];
+let versementsConfirmesMembre = []; // Depuis le correctif du 23 août 2026 : contient tous les versements NON ANNULÉS (statut 'collecte' OU 'confirme'), comptés immédiatement.
 let contratsTousMembre = [];
 let demandesRetraitMembre = [];
 let tousPaiementsMembre = [];
@@ -92,7 +92,6 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
-// --- Photo de profil ---
 document.getElementById('membre-avatar-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file || !currentUser) return;
@@ -108,7 +107,6 @@ document.getElementById('membre-avatar-input').addEventListener('change', async 
   }
 });
 
-// --- Changement de mot de passe ---
 function ajouterBoutonChangerMotDePasse() {
   if (document.getElementById('btn-changer-mdp')) return;
   const btnLogout = document.getElementById('logoutBtn');
@@ -287,7 +285,6 @@ function calculerSoldeDisponible() {
   return Math.max(0, epargneNette - pretDu);
 }
 
-// --- Calcul du solde des anciens contrats clôturés, non encore soldés ---
 function calculerAnciensContratsNonSoldes() {
   const idContratActif = contratActifMembre ? contratActifMembre.id : null;
   const anciensNonSoldes = contratsTousMembre.filter((c) =>
@@ -299,7 +296,6 @@ function calculerAnciensContratsNonSoldes() {
   return { anciensNonSoldes, total };
 }
 
-// --- Contrat(s) non soldé(s) : informatif uniquement, le retrait se fait via "Demander un retrait" ---
 function mettreAJourContratNonSolde() {
   const zone = document.getElementById('contratNonSoldeZone');
   if (!zone) return;
@@ -404,7 +400,13 @@ function ecouterCotisations(uid) {
 
   onSnapshot(q, (snapshot) => {
     tousPaiementsMembre = snapshot.docs.map((d) => d.data());
-    versementsConfirmesMembre = tousPaiementsMembre.filter((d) => d.statut === 'confirme');
+    // --- Correctif (23 août 2026) ---
+    // Le solde du membre compte désormais IMMÉDIATEMENT tout versement enregistré
+    // par le collecteur, sans attendre la confirmation du PDG. Seuls les versements
+    // annulés par le PDG (statut 'annule') en sont exclus. La confirmation ('confirme')
+    // ne sert plus qu'à verrouiller définitivement l'opération après 24h et déclencher
+    // la commission — elle n'est plus une condition pour que le solde du membre bouge.
+    versementsConfirmesMembre = tousPaiementsMembre.filter((d) => d.statut !== 'annule');
     rafraichirCotisations();
     mettreAJourBadgeInactif();
     mettreAJourContratNonSolde();
@@ -426,7 +428,7 @@ function rafraichirCotisations() {
     .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
 
   totalConfirmeMembre = docsDuContrat
-    .filter((d) => d.statut === 'confirme' && d.jour_numero !== 1)
+    .filter((d) => d.statut !== 'annule' && d.jour_numero !== 1)
     .reduce((s, d) => s + Number(d.montant || 0), 0);
   recalculerSolde();
 
@@ -436,15 +438,17 @@ function rafraichirCotisations() {
   }
 
   list.innerHTML = '';
-  docsDuContrat.forEach((data) => {
-    const row = document.createElement('div');
-    row.className = 'cotis-row';
-    row.innerHTML = `
-      <span>${formatDate(data.date)}</span>
-      <span>${formatMontant(data.montant)}</span>
-    `;
-    list.appendChild(row);
-  });
+  docsDuContrat
+    .filter((d) => d.statut !== 'annule')
+    .forEach((data) => {
+      const row = document.createElement('div');
+      row.className = 'cotis-row';
+      row.innerHTML = `
+        <span>${formatDate(data.date)}</span>
+        <span>${formatMontant(data.montant)}</span>
+      `;
+      list.appendChild(row);
+    });
 }
 
 function libelleTypeRetrait(type) {
@@ -490,7 +494,6 @@ function ecouterHistoriqueRetraits(uid) {
   });
 }
 
-// --- CORRECTIF (21 août 2026) ---
 function evaluerCasRetrait(montant) {
   if (pretActif) {
     const montantDu = calculerMontantDuPretActif();
@@ -639,10 +642,6 @@ async function enregistrerModificationMontant(nouveauMontant) {
   }
 }
 
-// ==========================================================
-// --- Communication : diffusions du PDG (membres) + conversation privée ---
-// ==========================================================
-
 function ecouterDiffusionsMembre() {
   const q = query(collection(db, 'diffusions'), where('groupe_cible', '==', 'membres'));
   onSnapshot(q, (snapshot) => {
@@ -745,7 +744,6 @@ document.getElementById('form-message-pdg-membre').addEventListener('submit', as
   }
 });
 
-// --- Dépliants ---
 document.getElementById('titre-cotisations').addEventListener('click', () => {
   document.getElementById('cotisationsList').classList.toggle('hidden');
   document.getElementById('titre-cotisations').classList.toggle('ouvert');
