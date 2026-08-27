@@ -24,21 +24,24 @@ import {
   badgeStatut,
   afficherMessage,
   calculerStatutContrat,
+  TYPES_CONTRAT,
+  infoTypeContrat,
+  calculerMontantDuPretGeneralise,
 } from "./utils.js";
 
 const AVATAR_DEFAUT = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='56'><rect width='56' height='56' fill='%23ddd'/></svg>";
 
 let currentUser = null;
 let currentMemberData = null;
-let totalConfirmeMembre = 0;
-let totalCommissionMembre = 0;
 let propositionActuelle = null;
-let pretActif = null;
-let contratActifMembre = null;
-let versementsConfirmesMembre = []; // Depuis le correctif du 23 août 2026 : contient tous les versements NON ANNULÉS (statut 'collecte' OU 'confirme'), comptés immédiatement.
 let contratsTousMembre = [];
-let demandesRetraitMembre = [];
+let versementsConfirmesMembre = []; // versements NON ANNULÉS (statut 'collecte' OU 'confirme'), comptés immédiatement.
 let tousPaiementsMembre = [];
+let tousPretsMembre = [];
+let tousRemboursementsMembre = [];
+let toutesDepensesMembre = [];
+let toutesRedistributionsMembre = [];
+let demandesRetraitMembre = [];
 let diffusionsMembre = [];
 let mesMessagesPdgMembre = [];
 
@@ -223,7 +226,10 @@ async function chargerDonneesMembre(uid) {
     ecouterCotisations(uid);
     ecouterContratsMembre(uid);
     ecouterHistoriqueRetraits(uid);
-    ecouterPretActif(uid);
+    ecouterPretsMembre(uid);
+    ecouterRemboursements();
+    ecouterDepensesMembre(uid);
+    ecouterRedistributionsMembre(uid);
     ecouterPropositionReconduction(uid);
     ecouterDiffusionsMembre();
     ecouterMessagesPdgMembre(uid);
@@ -240,60 +246,193 @@ function ecouterContratsMembre(uid) {
   );
 
   onSnapshot(q, (snapshot) => {
-    totalCommissionMembre = snapshot.docs.reduce(
-      (s, d) => s + Number(d.data().commission || 0), 0
-    );
-    const contrats = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-    contratsTousMembre = contrats;
-    contratActifMembre = contrats.find((c) => c.statut === 'actif') || null;
-    rafraichirCotisations();
-    mettreAJourBadgeInactif();
-    mettreAJourContratNonSolde();
+    contratsTousMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    rafraichirTableauDeBord();
   });
 }
 
-function recalculerSolde() {
-  const pretDu = calculerMontantDuPretActif();
-  const solde = totalConfirmeMembre - pretDu;
-  document.getElementById('soldeMembre').textContent = formatMontant(solde > 0 ? solde : 0);
+function ecouterPretsMembre(uid) {
+  const q = query(collection(db, 'prets'), where('membre_id', '==', uid));
+  onSnapshot(q, (snapshot) => {
+    tousPretsMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    rafraichirTableauDeBord();
+  });
 }
 
-function mettreAJourBadgeInactif() {
-  const badge = document.getElementById('badgeInactif');
-  if (!badge) return;
-  const statut = calculerStatutContrat(contratActifMembre, versementsConfirmesMembre);
-  badge.classList.toggle('hidden', statut !== 'inactif');
+function ecouterRemboursements() {
+  // Nécessaire pour calculer le montant dû des prêts (partagé, non filtré par membre).
+  onSnapshot(collection(db, 'remboursements_prets'), (snapshot) => {
+    tousRemboursementsMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    rafraichirTableauDeBord();
+  });
 }
 
-function calculerEpargneNetteContratLocal(contratId) {
-  return versementsConfirmesMembre
-    .filter((v) => v.contract_id === contratId && v.jour_numero !== 1)
-    .reduce((s, v) => s + Number(v.montant || 0), 0);
+function ecouterDepensesMembre(uid) {
+  const q = query(collection(db, 'depenses'), where('membre_id', '==', uid));
+  onSnapshot(q, (snapshot) => {
+    toutesDepensesMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    rafraichirTableauDeBord();
+  });
 }
 
-function calculerMontantDuPretActif() {
-  if (!pretActif) return 0;
-  const dateDebut = pretActif.date_debut && pretActif.date_debut.toDate ? pretActif.date_debut.toDate() : new Date();
-  const nbSemaines = Math.floor((new Date() - dateDebut) / (1000 * 60 * 60 * 24 * 7)) + 1;
-  const montantDuBrut = pretActif.montant_initial * (1 + pretActif.taux_hebdo * nbSemaines);
-  return Math.max(0, montantDuBrut);
+function ecouterRedistributionsMembre(uid) {
+  const q = query(collection(db, 'redistributions_interets'), where('membre_id', '==', uid));
+  onSnapshot(q, (snapshot) => {
+    toutesRedistributionsMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    rafraichirTableauDeBord();
+  });
 }
 
-function calculerSoldeDisponible() {
-  const epargneNette = contratActifMembre ? calculerEpargneNetteContratLocal(contratActifMembre.id) : 0;
-  const pretDu = calculerMontantDuPretActif();
+// ==========================================================
+// --- NOUVEAU (25 août 2026) : calcul généralisé par type de contrat ---
+// Journalier : jour_numero === 1 est la commission (exclue de l'épargne nette).
+// Hebdomadaire / Mensuel : tous les versements comptent, moins les dépenses
+// non compensées, plus les redistributions reçues.
+// ==========================================================
+
+function calculerEpargneNetteContratLocal(contrat) {
+  const typeContrat = contrat.type_contrat || 'journalier';
+  const versements = versementsConfirmesMembre.filter((v) => v.contract_id === contrat.id);
+
+  if (typeContrat === 'journalier') {
+    return versements.filter((v) => v.jour_numero !== 1).reduce((s, v) => s + Number(v.montant || 0), 0);
+  }
+  let epargne = versements.reduce((s, v) => s + Number(v.montant || 0), 0);
+  const depensesNonCompensees = toutesDepensesMembre
+    .filter((d) => d.contract_id === contrat.id && !d.compensee)
+    .reduce((s, d) => s + Number(d.montant || 0), 0);
+  const redistributionsRecues = toutesRedistributionsMembre
+    .filter((r) => r.contract_id === contrat.id)
+    .reduce((s, r) => s + Number(r.montant || 0), 0);
+  return epargne - depensesNonCompensees + redistributionsRecues;
+}
+
+function trouverPretActif(contratId) {
+  return tousPretsMembre.find((p) => p.contract_id === contratId && p.statut === 'actif') || null;
+}
+
+function calculerMontantDuPret(pret) {
+  return calculerMontantDuPretGeneralise(pret, tousRemboursementsMembre);
+}
+
+function calculerSoldeDisponibleContrat(contrat) {
+  const epargneNette = calculerEpargneNetteContratLocal(contrat);
+  const pret = trouverPretActif(contrat.id);
+  const pretDu = pret ? calculerMontantDuPret(pret) : 0;
   return Math.max(0, epargneNette - pretDu);
 }
 
 function calculerAnciensContratsNonSoldes() {
-  const idContratActif = contratActifMembre ? contratActifMembre.id : null;
+  const idsActifs = new Set(contratsTousMembre.filter((c) => c.statut === 'actif').map((c) => c.id));
   const anciensNonSoldes = contratsTousMembre.filter((c) =>
-    c.statut === 'cloture' && !c.epargne_soldee && c.id !== idContratActif
+    c.statut === 'cloture' && !c.epargne_soldee && !idsActifs.has(c.id)
   );
   const total = anciensNonSoldes.reduce(
-    (s, c) => s + Math.max(0, calculerEpargneNetteContratLocal(c.id)), 0
+    (s, c) => s + Math.max(0, calculerEpargneNetteContratLocal(c)), 0
   );
   return { anciensNonSoldes, total };
+}
+
+function contratsActifs() {
+  return contratsTousMembre.filter((c) => c.statut === 'actif');
+}
+
+// ==========================================================
+// --- Tableau de bord multi-contrats ---
+// ==========================================================
+
+function rafraichirTableauDeBord() {
+  renderMesContrats();
+  mettreAJourContratNonSolde();
+  mettreAJourSelecteurRetrait();
+}
+
+function renderMesContrats() {
+  const zone = document.getElementById('mesContratsZone');
+  if (!zone) return;
+
+  const actifs = contratsActifs();
+
+  if (actifs.length === 0) {
+    zone.innerHTML = '<div class="card"><p style="color:#999; font-size:13px;">Aucun contrat en cours.</p></div>';
+    return;
+  }
+
+  const versementsConfirmesTous = versementsConfirmesMembre;
+
+  zone.innerHTML = actifs.map((contrat) => {
+    const typeContrat = contrat.type_contrat || 'journalier';
+    const infoType = infoTypeContrat(typeContrat);
+    const dureeTotale = contrat.duree_totale || infoType.duree;
+    const versementsContrat = versementsConfirmesTous
+      .filter((v) => v.contract_id === contrat.id)
+      .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
+    const periodesPayees = versementsContrat.length;
+    const epargneNette = calculerEpargneNetteContratLocal(contrat);
+    const solde = Math.max(0, epargneNette);
+    const pret = trouverPretActif(contrat.id);
+    const soldeDisponible = calculerSoldeDisponibleContrat(contrat);
+    const statutInactif = calculerStatutContrat(contrat, versementsConfirmesTous) === 'inactif';
+
+    const depensesNonCompensees = toutesDepensesMembre.filter((d) => d.contract_id === contrat.id && !d.compensee);
+    const totalDepensesNonCompensees = depensesNonCompensees.reduce((s, d) => s + Number(d.montant || 0), 0);
+    const redistributionsRecues = toutesRedistributionsMembre.filter((r) => r.contract_id === contrat.id);
+    const totalRedistributionsRecues = redistributionsRecues.reduce((s, r) => s + Number(r.montant || 0), 0);
+
+    const idListe = `cotis-list-${contrat.id}`;
+    const idTitre = `cotis-titre-${contrat.id}`;
+
+    return `
+      <div class="contrat-card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong>${infoType.label}</strong>
+          ${statutInactif ? '<span class="badge refuse" style="width:auto;">Inactif</span>' : ''}
+        </div>
+        <div class="contrat-solde">${formatMontant(solde)}</div>
+        <p style="text-align:center; color:#666; font-size:12px; margin-bottom:8px;">
+          ${infoType.labelPeriode.charAt(0).toUpperCase() + infoType.labelPeriode.slice(1)} ${periodesPayees}/${dureeTotale} ·
+          ${infoType.labelVersement} : ${formatMontant(contrat.montant_mise)}
+        </p>
+        ${pret ? `
+          <div class="pret-card" style="margin:10px 0;">
+            <p><strong>Prêt en cours</strong></p>
+            <p>Capital emprunté : ${formatMontant(pret.montant_initial)}</p>
+            <p>Montant dû actuellement : <strong>${formatMontant(calculerMontantDuPret(pret))}</strong></p>
+            <p style="font-size:12px; color:#c0392b;">Aucune nouvelle demande de retrait ou de prêt n'est possible sur ce contrat tant que ce prêt n'est pas totalement remboursé.</p>
+          </div>
+        ` : ''}
+        ${totalDepensesNonCompensees > 0 ? `
+          <p style="font-size:13px; color:#e67e22; font-weight:bold; margin-top:6px;">Dépenses non compensées : ${formatMontant(totalDepensesNonCompensees)}</p>
+          <div style="max-height:100px; overflow-y:auto; margin-top:4px;">
+            ${depensesNonCompensees.map((d) => `
+              <div class="cotis-row"><span>${d.date_depense || ''} — ${d.libelle}</span><span>${formatMontant(d.montant)}</span></div>
+            `).join('')}
+          </div>
+        ` : ''}
+        ${totalRedistributionsRecues > 0 ? `<p style="font-size:12px; color:#198754; margin-top:6px;">Redistribution d'intérêt reçue (cumul) : ${formatMontant(totalRedistributionsRecues)}</p>` : ''}
+        <h3 class="collapsible-title" id="${idTitre}" style="margin-top:12px; font-size:14px;">Historique des versements</h3>
+        <div id="${idListe}" class="hidden" style="margin-top:6px;">
+          ${versementsContrat.length === 0
+            ? '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>'
+            : versementsContrat.map((v) => `
+                <div class="cotis-row"><span>${formatDate(v.date)}</span><span>${formatMontant(v.montant)}</span></div>
+              `).join('')
+          }
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  actifs.forEach((contrat) => {
+    const titre = document.getElementById(`cotis-titre-${contrat.id}`);
+    const liste = document.getElementById(`cotis-list-${contrat.id}`);
+    if (titre && liste) {
+      titre.addEventListener('click', () => {
+        liste.classList.toggle('hidden');
+        titre.classList.toggle('ouvert');
+      });
+    }
+  });
 }
 
 function mettreAJourContratNonSolde() {
@@ -307,7 +446,7 @@ function mettreAJourContratNonSolde() {
       <div class="pret-card" style="border-left-color:#c0392b;">
         <p><strong style="color:#c0392b;">Contrat(s) non soldé(s)</strong></p>
         <p>Épargne non retirée d'ancien(s) contrat(s) : <strong>${formatMontant(totalNonSolde)}</strong></p>
-        <p style="font-size:12px; color:#999;">Pour la retirer, tapez ce montant dans "Demander un retrait" ci-dessous.</p>
+        <p style="font-size:12px; color:#999;">Pour la retirer, choisissez ce contrat ci-dessous et tapez ce montant dans "Demander un retrait".</p>
       </div>
     `;
   } else {
@@ -315,42 +454,36 @@ function mettreAJourContratNonSolde() {
   }
 }
 
-function ecouterPretActif(uid) {
-  const q = query(
-    collection(db, 'prets'),
-    where('membre_id', '==', uid),
-    where('statut', '==', 'actif')
-  );
-  onSnapshot(q, (snapshot) => {
-    if (snapshot.empty) {
-      pretActif = null;
-      afficherPretActif();
-      recalculerSolde();
-      return;
-    }
-    const d = snapshot.docs[0];
-    pretActif = { id: d.id, ...d.data() };
-    afficherPretActif();
-    recalculerSolde();
-  });
-}
+// Le membre choisit, parmi ses contrats actifs (et anciens non soldés),
+// celui concerné par sa demande de retrait — nécessaire depuis qu'un membre
+// peut avoir plusieurs contrats de types différents en même temps.
+function mettreAJourSelecteurRetrait() {
+  const select = document.getElementById('contratSelectionneRetrait');
+  const champZone = document.getElementById('champSelectionContratRetrait');
+  if (!select) return;
 
-function afficherPretActif() {
-  const zone = document.getElementById('pretZone');
-  if (!zone) return;
-  if (!pretActif) {
-    zone.innerHTML = '';
-    return;
+  const actifs = contratsActifs();
+  const { anciensNonSoldes } = calculerAnciensContratsNonSoldes();
+  const options = [];
+
+  actifs.forEach((c) => {
+    const infoType = infoTypeContrat(c.type_contrat || 'journalier');
+    options.push({ value: c.id, label: `${infoType.label} — en cours` });
+  });
+  anciensNonSoldes.forEach((c) => {
+    const infoType = infoTypeContrat(c.type_contrat || 'journalier');
+    options.push({ value: c.id, label: `${infoType.label} — contrat terminé, non soldé` });
+  });
+
+  const valeurActuelle = select.value;
+  select.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
+  if (options.some((o) => o.value === valeurActuelle)) {
+    select.value = valeurActuelle;
   }
-  const montantDu = calculerMontantDuPretActif();
-  zone.innerHTML = `
-    <div class="pret-card">
-      <p><strong>Prêt en cours</strong></p>
-      <p>Capital emprunté : ${formatMontant(pretActif.montant_initial)}</p>
-      <p>Montant dû actuellement (2%/semaine) : <strong>${formatMontant(montantDu)}</strong></p>
-      <p style="font-size:12px; color:#c0392b;">Aucune nouvelle demande de retrait ou de prêt n'est possible tant que ce prêt n'est pas totalement remboursé.</p>
-    </div>
-  `;
+
+  if (champZone) {
+    champZone.classList.toggle('hidden', options.length <= 1);
+  }
 }
 
 function ecouterPropositionReconduction(uid) {
@@ -400,55 +533,12 @@ function ecouterCotisations(uid) {
 
   onSnapshot(q, (snapshot) => {
     tousPaiementsMembre = snapshot.docs.map((d) => d.data());
-    // --- Correctif (23 août 2026) ---
-    // Le solde du membre compte désormais IMMÉDIATEMENT tout versement enregistré
-    // par le collecteur, sans attendre la confirmation du PDG. Seuls les versements
-    // annulés par le PDG (statut 'annule') en sont exclus. La confirmation ('confirme')
-    // ne sert plus qu'à verrouiller définitivement l'opération après 24h et déclencher
-    // la commission — elle n'est plus une condition pour que le solde du membre bouge.
+    // Le solde du membre compte immédiatement tout versement enregistré par le
+    // collecteur, sans attendre la confirmation du PDG. Seuls les versements
+    // annulés ('annule') en sont exclus.
     versementsConfirmesMembre = tousPaiementsMembre.filter((d) => d.statut !== 'annule');
-    rafraichirCotisations();
-    mettreAJourBadgeInactif();
-    mettreAJourContratNonSolde();
+    rafraichirTableauDeBord();
   });
-}
-
-function rafraichirCotisations() {
-  const list = document.getElementById('cotisationsList');
-
-  if (!contratActifMembre) {
-    totalConfirmeMembre = 0;
-    list.innerHTML = '<p style="color:#999; font-size:13px;">Aucun contrat en cours.</p>';
-    recalculerSolde();
-    return;
-  }
-
-  const docsDuContrat = tousPaiementsMembre
-    .filter((d) => d.contract_id === contratActifMembre.id)
-    .sort((a, b) => (b.date?.toMillis?.() || 0) - (a.date?.toMillis?.() || 0));
-
-  totalConfirmeMembre = docsDuContrat
-    .filter((d) => d.statut !== 'annule' && d.jour_numero !== 1)
-    .reduce((s, d) => s + Number(d.montant || 0), 0);
-  recalculerSolde();
-
-  if (docsDuContrat.length === 0) {
-    list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune cotisation enregistrée.</p>';
-    return;
-  }
-
-  list.innerHTML = '';
-  docsDuContrat
-    .filter((d) => d.statut !== 'annule')
-    .forEach((data) => {
-      const row = document.createElement('div');
-      row.className = 'cotis-row';
-      row.innerHTML = `
-        <span>${formatDate(data.date)}</span>
-        <span>${formatMontant(data.montant)}</span>
-      `;
-      list.appendChild(row);
-    });
 }
 
 function libelleTypeRetrait(type) {
@@ -471,7 +561,7 @@ function ecouterHistoriqueRetraits(uid) {
     list.innerHTML = '';
 
     demandesRetraitMembre = snapshot.docs.map((d) => d.data());
-    mettreAJourContratNonSolde();
+    rafraichirTableauDeBord();
 
     if (snapshot.empty) {
       list.innerHTML = '<p style="color:#999; font-size:13px;">Aucune demande pour le moment.</p>';
@@ -494,69 +584,67 @@ function ecouterHistoriqueRetraits(uid) {
   });
 }
 
-function evaluerCasRetrait(montant) {
-  if (pretActif) {
-    const montantDu = calculerMontantDuPretActif();
+// Évalue la demande de retrait pour le CONTRAT choisi par le membre
+// (paramètre contratId), et non plus un unique "contrat actif" global.
+function evaluerCasRetrait(montant, contratId) {
+  const contrat = contratsTousMembre.find((c) => c.id === contratId);
+  if (!contrat) {
+    return { decision: 'rejet', message: "Contrat introuvable. Veuillez réessayer." };
+  }
+
+  const pretActifDuContrat = trouverPretActif(contrat.id);
+  if (pretActifDuContrat) {
+    const montantDu = calculerMontantDuPret(pretActifDuContrat);
     return {
       decision: 'rejet',
-      message: `Vous avez déjà un prêt en cours (${formatMontant(montantDu)} dû). Aucune nouvelle demande de retrait ou de prêt n'est possible tant qu'il n'est pas totalement remboursé.`,
+      message: `Vous avez déjà un prêt en cours sur ce contrat (${formatMontant(montantDu)} dû). Aucune nouvelle demande de retrait ou de prêt n'est possible tant qu'il n'est pas totalement remboursé.`,
     };
   }
 
-  const { anciensNonSoldes, total: ancienSolde } = calculerAnciensContratsNonSoldes();
+  const estContratTermineNonSolde = contrat.statut === 'cloture' && !contrat.epargne_soldee;
+  const epargneNette = calculerEpargneNetteContratLocal(contrat);
 
-  if (!contratActifMembre) {
-    if (ancienSolde === 0) {
-      return { decision: 'rejet', message: "Vous n'avez aucun contrat en cours." };
-    }
-    if (montant > ancienSolde) {
-      return { decision: 'rejet', message: `Retrait impossible : votre ancien solde non soldé (${formatMontant(ancienSolde)}) est insuffisant pour couvrir ce montant.` };
+  if (estContratTermineNonSolde) {
+    if (montant > epargneNette) {
+      return { decision: 'rejet', message: `Retrait impossible : le montant dépasse l'épargne non soldée de ce contrat (${formatMontant(epargneNette)}).` };
     }
     return {
       decision: 'accepte',
       type: 'solde_contrat_termine',
-      contratId: anciensNonSoldes.length > 0 ? anciensNonSoldes[0].id : null,
+      contratId: contrat.id,
       message: 'Demande envoyée à votre collecteur : ce retrait sera traité comme un solde de contrat terminé.',
     };
   }
 
-  const epargneNette = calculerEpargneNetteContratLocal(contratActifMembre.id);
+  if (contrat.statut !== 'actif') {
+    return { decision: 'rejet', message: "Ce contrat n'est plus actif." };
+  }
 
   if (montant > epargneNette) {
-    if (ancienSolde === 0) {
-      return { decision: 'rejet', message: "Retrait impossible : le montant dépasse votre épargne nette actuelle et vous n'avez aucun ancien contrat non soldé." };
-    }
-    if (ancienSolde < montant) {
-      return { decision: 'rejet', message: `Retrait impossible : votre ancien solde non soldé (${formatMontant(ancienSolde)}) est insuffisant pour couvrir ce montant.` };
-    }
-    return {
-      decision: 'accepte',
-      type: 'solde_contrat_termine',
-      contratId: contratActifMembre.id,
-      message: 'Demande envoyée à votre collecteur : ce retrait sera traité comme un solde de contrat terminé.',
-    };
+    return { decision: 'rejet', message: "Retrait impossible : le montant dépasse votre épargne nette actuelle sur ce contrat." };
   }
 
-  if (montant === epargneNette && ancienSolde === 0) {
+  if (montant === epargneNette) {
     return {
       decision: 'accepte',
       type: 'retrait_final',
-      contratId: contratActifMembre.id,
-      message: 'Demande envoyée à votre collecteur : ce retrait clôturera votre contrat en cours si votre collecteur la confirme.',
+      contratId: contrat.id,
+      message: 'Demande envoyée à votre collecteur : ce retrait clôturera ce contrat si votre collecteur la confirme.',
     };
   }
 
   return {
     decision: 'accepte',
     type: 'pret',
-    contratId: contratActifMembre.id,
-    message: 'Demande envoyée à votre collecteur : ce retrait sera traité comme un prêt à 2%/semaine, en attente de sa validation.',
+    contratId: contrat.id,
+    message: 'Demande envoyée à votre collecteur : ce retrait sera traité comme un prêt sur ce contrat, en attente de sa validation.',
   };
 }
 
 document.getElementById('demandeRetraitBtn').addEventListener('click', async () => {
   const montantInput = document.getElementById('montantRetrait');
   const montant = parseFloat(montantInput.value);
+  const contratId = document.getElementById('contratSelectionneRetrait').value;
   const retraitMsg = document.getElementById('retraitMsg');
   retraitMsg.textContent = '';
 
@@ -565,18 +653,23 @@ document.getElementById('demandeRetraitBtn').addEventListener('click', async () 
     return;
   }
 
+  if (!contratId) {
+    afficherMessage('retraitMsg', "Vous n'avez aucun contrat éligible à un retrait actuellement.", 'red');
+    return;
+  }
+
   if (!currentMemberData || !currentMemberData.parrain_id) {
     afficherMessage('retraitMsg', "Aucun collecteur n'est rattaché à votre compte. Contactez le PDG.", 'red');
     return;
   }
 
-  const demandeDejaEnCours = demandesRetraitMembre.some((d) => d.statut === 'en_attente');
+  const demandeDejaEnCours = demandesRetraitMembre.some((d) => d.statut === 'en_attente' && d.contractId === contratId);
   if (demandeDejaEnCours) {
-    afficherMessage('retraitMsg', 'Vous avez déjà une demande en attente. Attendez son traitement avant d\'en envoyer une nouvelle.', 'red');
+    afficherMessage('retraitMsg', 'Vous avez déjà une demande en attente pour ce contrat. Attendez son traitement avant d\'en envoyer une nouvelle.', 'red');
     return;
   }
 
-  const resultat = evaluerCasRetrait(montant);
+  const resultat = evaluerCasRetrait(montant, contratId);
 
   if (resultat.decision === 'rejet') {
     afficherMessage('retraitMsg', resultat.message, 'red');
@@ -617,7 +710,7 @@ async function repondreProposition(choix) {
 }
 
 function ouvrirModificationMontant() {
-  const nouveauMontant = prompt('Quel nouveau montant de versement quotidien souhaitez-vous ? (GNF)');
+  const nouveauMontant = prompt('Quel nouveau montant de versement souhaitez-vous ? (GNF)');
   if (nouveauMontant === null) return;
   const montantNum = parseFloat(nouveauMontant);
   if (isNaN(montantNum) || montantNum <= 0) {
@@ -744,10 +837,6 @@ document.getElementById('form-message-pdg-membre').addEventListener('submit', as
   }
 });
 
-document.getElementById('titre-cotisations').addEventListener('click', () => {
-  document.getElementById('cotisationsList').classList.toggle('hidden');
-  document.getElementById('titre-cotisations').classList.toggle('ouvert');
-});
 document.getElementById('titre-historique-demandes').addEventListener('click', () => {
   document.getElementById('withdrawalHistory').classList.toggle('hidden');
   document.getElementById('titre-historique-demandes').classList.toggle('ouvert');
