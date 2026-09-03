@@ -78,8 +78,37 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
   await signOut(auth);
 });
 
+// ==========================================================
+// --- CORRECTIF (3 sept 2026) : suppression de compte définitive ---
+// Un membre marqué "supprime" par le PDG (statut sur son document
+// users/{uid}) ne doit plus jamais pouvoir accéder au dashboard, même si
+// son compte Firebase Authentication reste techniquement valide
+// (impossible à supprimer réellement sans Cloud Functions/plan payant).
+// On bloque donc l'accès ici, à chaque connexion ET à chaque rechargement
+// de l'app tant qu'une session existe.
+// ==========================================================
 onAuthStateChanged(auth, async (user) => {
   if (user) {
+    let compteValide = false;
+    try {
+      const userSnap = await getDoc(doc(db, 'users', user.uid));
+      if (userSnap.exists() && userSnap.data().role === 'membre' && userSnap.data().statut !== 'supprime') {
+        compteValide = true;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    if (!compteValide) {
+      await signOut(auth);
+      currentUser = null;
+      dashboard.classList.add('hidden');
+      loading.classList.add('hidden');
+      loginScreen.classList.remove('hidden');
+      loginError.textContent = "Ce compte a été supprimé. Contactez votre PDG ou votre collecteur.";
+      return;
+    }
+
     currentUser = user;
     loginScreen.classList.add('hidden');
     loading.classList.remove('hidden');
