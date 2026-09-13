@@ -1,3 +1,4 @@
+// === MEMBRE — PARTIE 1/2 ===
 import {
   auth,
   db,
@@ -35,7 +36,7 @@ let currentUser = null;
 let currentMemberData = null;
 let propositionActuelle = null;
 let contratsTousMembre = [];
-let versementsConfirmesMembre = []; // versements NON ANNULÉS (statut 'collecte' OU 'confirme'), comptés immédiatement.
+let versementsConfirmesMembre = [];
 let tousPaiementsMembre = [];
 let tousPretsMembre = [];
 let tousRemboursementsMembre = [];
@@ -44,6 +45,9 @@ let toutesRedistributionsMembre = [];
 let demandesRetraitMembre = [];
 let diffusionsMembre = [];
 let mesMessagesPdgMembre = [];
+// --- NOUVEAU (13 sept 2026) : propositions de nouveau contrat superposable ---
+let propositionsNouveauContratMembre = [];
+let parametresInteretsMembre = { pdg: 0.70, collecteur: 0.30, redistribution: 0 };
 
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
@@ -78,15 +82,6 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
   await signOut(auth);
 });
 
-// ==========================================================
-// --- CORRECTIF (3 sept 2026) : suppression de compte définitive ---
-// Un membre marqué "supprime" par le PDG (statut sur son document
-// users/{uid}) ne doit plus jamais pouvoir accéder au dashboard, même si
-// son compte Firebase Authentication reste techniquement valide
-// (impossible à supprimer réellement sans Cloud Functions/plan payant).
-// On bloque donc l'accès ici, à chaque connexion ET à chaque rechargement
-// de l'app tant qu'une session existe.
-// ==========================================================
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     let compteValide = false;
@@ -262,6 +257,9 @@ async function chargerDonneesMembre(uid) {
     ecouterPropositionReconduction(uid);
     ecouterDiffusionsMembre();
     ecouterMessagesPdgMembre(uid);
+    // --- NOUVEAU (13 sept 2026) ---
+    ecouterParametresMembre();
+    ecouterPropositionsNouveauContrat(uid);
 
   } catch (err) {
     console.error('Erreur chargement membre :', err);
@@ -289,7 +287,6 @@ function ecouterPretsMembre(uid) {
 }
 
 function ecouterRemboursements() {
-  // Nécessaire pour calculer le montant dû des prêts (partagé, non filtré par membre).
   onSnapshot(collection(db, 'remboursements_prets'), (snapshot) => {
     tousRemboursementsMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
     rafraichirTableauDeBord();
@@ -312,12 +309,21 @@ function ecouterRedistributionsMembre(uid) {
   });
 }
 
-// ==========================================================
-// --- NOUVEAU (25 août 2026) : calcul généralisé par type de contrat ---
-// Journalier : jour_numero === 1 est la commission (exclue de l'épargne nette).
-// Hebdomadaire / Mensuel : tous les versements comptent, moins les dépenses
-// non compensées, plus les redistributions reçues.
-// ==========================================================
+// --- NOUVEAU (13 sept 2026) : paramètres de répartition (nécessaires pour
+// calculer la répartition PDG/collecteur des frais d'inscription lorsque le
+// membre confirme lui-même un nouveau contrat hebdo/mensuel) ---
+function ecouterParametresMembre() {
+  onSnapshot(doc(db, 'parametres', 'interets_types_annuels'), (snap) => {
+    if (snap.exists()) {
+      const d = snap.data();
+      parametresInteretsMembre = {
+        pdg: Number(d.pdg ?? 0.70),
+        collecteur: Number(d.collecteur ?? 0.30),
+        redistribution: Number(d.redistribution ?? 0),
+      };
+    }
+  });
+}
 
 function calculerEpargneNetteContratLocal(contrat) {
   const typeContrat = contrat.type_contrat || 'journalier';
@@ -365,10 +371,6 @@ function calculerAnciensContratsNonSoldes() {
 function contratsActifs() {
   return contratsTousMembre.filter((c) => c.statut === 'actif');
 }
-
-// ==========================================================
-// --- Tableau de bord multi-contrats ---
-// ==========================================================
 
 function rafraichirTableauDeBord() {
   renderMesContrats();
@@ -463,7 +465,8 @@ function renderMesContrats() {
     }
   });
 }
-
+// === FIN MEMBRE — PARTIE 1/2 ===
+// === MEMBRE — PARTIE 2/2 ===
 function mettreAJourContratNonSolde() {
   const zone = document.getElementById('contratNonSoldeZone');
   if (!zone) return;
@@ -483,9 +486,6 @@ function mettreAJourContratNonSolde() {
   }
 }
 
-// Le membre choisit, parmi ses contrats actifs (et anciens non soldés),
-// celui concerné par sa demande de retrait — nécessaire depuis qu'un membre
-// peut avoir plusieurs contrats de types différents en même temps.
 function mettreAJourSelecteurRetrait() {
   const select = document.getElementById('contratSelectionneRetrait');
   const champZone = document.getElementById('champSelectionContratRetrait');
@@ -554,6 +554,140 @@ function afficherPropositionReconduction() {
   document.getElementById('btn-refuser-reconduction').addEventListener('click', () => repondreProposition('refuse'));
 }
 
+// ==========================================================
+// --- NOUVEAU (13 sept 2026) : propositions de nouveau contrat superposable ---
+// Le collecteur peut proposer un nouveau contrat (même type ou non) qui
+// s'ajoutera à ceux déjà en cours du membre. Le membre confirme ou rejette
+// ici. La confirmation crée directement le contrat + son 1er versement
+// (jour 1 pour journalier) ou ses frais d'inscription (hebdo/mensuel).
+// ==========================================================
+
+function ecouterPropositionsNouveauContrat(uid) {
+  const q = query(
+    collection(db, 'propositions_nouveau_contrat'),
+    where('membre_id', '==', uid),
+    where('statut', '==', 'en_attente')
+  );
+  onSnapshot(q, (snapshot) => {
+    propositionsNouveauContratMembre = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    afficherPropositionsNouveauContrat();
+  });
+}
+
+function afficherPropositionsNouveauContrat() {
+  let zone = document.getElementById('nouveauxContratsZone');
+  if (!zone) {
+    zone = document.createElement('div');
+    zone.id = 'nouveauxContratsZone';
+    const propositionZoneEl = document.getElementById('propositionZone');
+    if (propositionZoneEl && propositionZoneEl.parentElement) {
+      propositionZoneEl.insertAdjacentElement('afterend', zone);
+    } else {
+      dashboard.prepend(zone);
+    }
+  }
+
+  if (propositionsNouveauContratMembre.length === 0) {
+    zone.innerHTML = '';
+    return;
+  }
+
+  zone.innerHTML = propositionsNouveauContratMembre.map((p) => {
+    const infoType = infoTypeContrat(p.type_contrat || 'journalier');
+    return `
+      <div class="proposition-card" data-id="${p.id}">
+        <p><strong>Votre collecteur vous propose un nouveau contrat : ${infoType.label}</strong></p>
+        <p>${infoType.labelVersement} : ${formatMontant(p.montant_periode)}${p.frais_inscription ? ` — Frais d'inscription : ${formatMontant(p.frais_inscription)}` : ''}</p>
+        <p style="font-size:12px; color:#666;">Ce contrat s'ajoutera à votre/vos contrat(s) en cours si vous confirmez. Vous pouvez aussi le rejeter.</p>
+        <button data-action="confirmer-nouveau-contrat" data-id="${p.id}">Confirmer</button>
+        <button data-action="rejeter-nouveau-contrat" data-id="${p.id}">Rejeter</button>
+      </div>
+    `;
+  }).join('');
+
+  zone.querySelectorAll('[data-action="confirmer-nouveau-contrat"]').forEach((btn) => {
+    btn.addEventListener('click', () => confirmerNouveauContrat(btn.dataset.id));
+  });
+  zone.querySelectorAll('[data-action="rejeter-nouveau-contrat"]').forEach((btn) => {
+    btn.addEventListener('click', () => rejeterNouveauContrat(btn.dataset.id));
+  });
+}
+
+async function confirmerNouveauContrat(propositionId) {
+  const proposition = propositionsNouveauContratMembre.find((p) => p.id === propositionId);
+  if (!proposition) return;
+
+  try {
+    const typeContrat = proposition.type_contrat || 'journalier';
+    const infoType = infoTypeContrat(typeContrat);
+    const contratData = {
+      membre_id: currentUser.uid,
+      membre_nom: currentMemberData ? currentMemberData.nom : '',
+      collecteur_id: proposition.collecteur_id,
+      statut: 'actif',
+      type_contrat: typeContrat,
+      duree_totale: infoType.duree,
+      montant_mise: proposition.montant_periode,
+      date_debut: new Date().toISOString(),
+    };
+    if (typeContrat === 'journalier') {
+      contratData.commission = proposition.montant_periode;
+    } else {
+      contratData.frais_inscription = proposition.frais_inscription || 0;
+    }
+
+    const contratRef = await addDoc(collection(db, 'contracts'), contratData);
+
+    if (typeContrat === 'journalier') {
+      await addDoc(collection(db, 'payments'), {
+        contract_id: contratRef.id,
+        collecteur_id: proposition.collecteur_id,
+        membre_id: currentUser.uid,
+        montant: proposition.montant_periode,
+        jour_numero: 1,
+        statut: 'collecte',
+        date: serverTimestamp(),
+      });
+    } else if (proposition.frais_inscription > 0) {
+      const montantPdg = proposition.frais_inscription * parametresInteretsMembre.pdg;
+      const montantCollecteur = proposition.frais_inscription * parametresInteretsMembre.collecteur;
+      await addDoc(collection(db, 'frais_inscription'), {
+        contract_id: contratRef.id,
+        membre_id: currentUser.uid,
+        collecteur_id: proposition.collecteur_id,
+        montant_total: proposition.frais_inscription,
+        montant_pdg: montantPdg,
+        montant_collecteur: montantCollecteur,
+        date: serverTimestamp(),
+      });
+    }
+
+    await updateDoc(doc(db, 'propositions_nouveau_contrat', proposition.id), {
+      statut: 'accepte',
+      contrat_cree_id: contratRef.id,
+      date_reponse: serverTimestamp(),
+    });
+
+    afficherMessage('retraitMsg', 'Nouveau contrat confirmé et ajouté à vos contrats.', 'green');
+  } catch (err) {
+    console.error('Erreur confirmation nouveau contrat :', err);
+    afficherMessage('retraitMsg', "Erreur lors de la confirmation du contrat.", 'red');
+  }
+}
+
+async function rejeterNouveauContrat(propositionId) {
+  try {
+    await updateDoc(doc(db, 'propositions_nouveau_contrat', propositionId), {
+      statut: 'refuse',
+      date_reponse: serverTimestamp(),
+    });
+    afficherMessage('retraitMsg', 'Proposition de nouveau contrat rejetée.', 'green');
+  } catch (err) {
+    console.error('Erreur rejet nouveau contrat :', err);
+    afficherMessage('retraitMsg', "Erreur lors du rejet.", 'red');
+  }
+}
+
 function ecouterCotisations(uid) {
   const q = query(
     collection(db, 'payments'),
@@ -562,9 +696,6 @@ function ecouterCotisations(uid) {
 
   onSnapshot(q, (snapshot) => {
     tousPaiementsMembre = snapshot.docs.map((d) => d.data());
-    // Le solde du membre compte immédiatement tout versement enregistré par le
-    // collecteur, sans attendre la confirmation du PDG. Seuls les versements
-    // annulés ('annule') en sont exclus.
     versementsConfirmesMembre = tousPaiementsMembre.filter((d) => d.statut !== 'annule');
     rafraichirTableauDeBord();
   });
@@ -613,8 +744,6 @@ function ecouterHistoriqueRetraits(uid) {
   });
 }
 
-// Évalue la demande de retrait pour le CONTRAT choisi par le membre
-// (paramètre contratId), et non plus un unique "contrat actif" global.
 function evaluerCasRetrait(montant, contratId) {
   const contrat = contratsTousMembre.find((c) => c.id === contratId);
   if (!contrat) {
@@ -870,3 +999,4 @@ document.getElementById('titre-historique-demandes').addEventListener('click', (
   document.getElementById('withdrawalHistory').classList.toggle('hidden');
   document.getElementById('titre-historique-demandes').classList.toggle('ouvert');
 });
+// === FIN MEMBRE — PARTIE 2/2 ===
