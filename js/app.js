@@ -45,7 +45,6 @@ let toutesRedistributionsMembre = [];
 let demandesRetraitMembre = [];
 let diffusionsMembre = [];
 let mesMessagesPdgMembre = [];
-// --- NOUVEAU (13 sept 2026) : propositions de nouveau contrat superposable ---
 let propositionsNouveauContratMembre = [];
 let parametresInteretsMembre = { pdg: 0.70, collecteur: 0.30, redistribution: 0 };
 
@@ -225,6 +224,40 @@ function ouvrirChangementMotDePasse() {
   });
 }
 
+// ==========================================================
+// --- NOUVEAU (13 sept 2026) : bouton "COMMUNICATION" créé en JS.
+// Masque par défaut les diffusions du PDG, le fil de messages privés et le
+// formulaire de réponse. Un clic sur le bouton affiche/masque ces zones.
+// ==========================================================
+function initialiserBoutonCommunicationMembre() {
+  if (document.getElementById('btn-communication-membre')) return;
+  const ids = ['diffusionsMembreList', 'filPdgMessagesMembre', 'form-message-pdg-membre'];
+  const cartes = [];
+  ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const carte = el.closest('.card') || el.parentElement;
+    if (carte && !cartes.includes(carte)) cartes.push(carte);
+  });
+  if (cartes.length === 0) return;
+
+  cartes.forEach((c) => c.classList.add('hidden'));
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'btn-communication-membre';
+  btn.textContent = 'COMMUNICATION';
+  btn.style.width = '100%';
+  btn.style.marginBottom = '10px';
+  btn.style.background = '#0d6efd';
+  btn.style.color = 'white';
+  btn.addEventListener('click', () => {
+    const masque = cartes[0].classList.contains('hidden');
+    cartes.forEach((c) => c.classList.toggle('hidden', !masque));
+  });
+  cartes[0].insertAdjacentElement('beforebegin', btn);
+}
+
 async function chargerDonneesMembre(uid) {
   try {
     const memberRef = doc(db, 'users', uid);
@@ -257,9 +290,9 @@ async function chargerDonneesMembre(uid) {
     ecouterPropositionReconduction(uid);
     ecouterDiffusionsMembre();
     ecouterMessagesPdgMembre(uid);
-    // --- NOUVEAU (13 sept 2026) ---
     ecouterParametresMembre();
     ecouterPropositionsNouveauContrat(uid);
+    initialiserBoutonCommunicationMembre();
 
   } catch (err) {
     console.error('Erreur chargement membre :', err);
@@ -309,9 +342,6 @@ function ecouterRedistributionsMembre(uid) {
   });
 }
 
-// --- NOUVEAU (13 sept 2026) : paramètres de répartition (nécessaires pour
-// calculer la répartition PDG/collecteur des frais d'inscription lorsque le
-// membre confirme lui-même un nouveau contrat hebdo/mensuel) ---
 function ecouterParametresMembre() {
   onSnapshot(doc(db, 'parametres', 'interets_types_annuels'), (snap) => {
     if (snap.exists()) {
@@ -465,8 +495,7 @@ function renderMesContrats() {
     }
   });
 }
-// === FIN MEMBRE — PARTIE 1/2 ===
-// === MEMBRE — PARTIE 2/2 ===
+// === FIN MEMBRE — PARTIE 1/2 ===// === MEMBRE — PARTIE 2/2 ===
 function mettreAJourContratNonSolde() {
   const zone = document.getElementById('contratNonSoldeZone');
   if (!zone) return;
@@ -553,14 +582,6 @@ function afficherPropositionReconduction() {
   document.getElementById('btn-reconduire-modifie').addEventListener('click', ouvrirModificationMontant);
   document.getElementById('btn-refuser-reconduction').addEventListener('click', () => repondreProposition('refuse'));
 }
-
-// ==========================================================
-// --- NOUVEAU (13 sept 2026) : propositions de nouveau contrat superposable ---
-// Le collecteur peut proposer un nouveau contrat (même type ou non) qui
-// s'ajoutera à ceux déjà en cours du membre. Le membre confirme ou rejette
-// ici. La confirmation crée directement le contrat + son 1er versement
-// (jour 1 pour journalier) ou ses frais d'inscription (hebdo/mensuel).
-// ==========================================================
 
 function ecouterPropositionsNouveauContrat(uid) {
   const q = query(
@@ -959,6 +980,11 @@ function renderFilPdgMembre() {
     } else {
       badge.classList.add('hidden');
     }
+  }
+
+  const btnCommunicationMembre = document.getElementById('btn-communication-membre');
+  if (btnCommunicationMembre) {
+    btnCommunicationMembre.style.background = nonLus.length > 0 ? '#198754' : '#0d6efd';
   }
 
   nonLus.forEach(async (m) => {
