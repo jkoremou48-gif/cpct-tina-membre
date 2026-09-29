@@ -48,6 +48,36 @@ let mesMessagesPdgMembre = [];
 let propositionsNouveauContratMembre = [];
 let parametresInteretsMembre = { pdg: 0.70, collecteur: 0.30, redistribution: 0 };
 
+// ==========================================================
+// --- NOUVEAU (28 sept 2026) : CONVENTION DE COMMISSION DU COLLECTEUR.
+// Chaque collecteur a sa propre répartition PDG / collecteur (champs
+// taux_commission_pdg et taux_commission_collecteur sur son document users,
+// fractions dont la somme vaut 1). Sans convention : 70/30 par défaut.
+// Utilisé lors de la confirmation d'un nouveau contrat par le membre, pour
+// figer le taux sur le versement du jour 1 et partager les frais d'inscription.
+// ==========================================================
+const TAUX_PDG_DEFAUT = 0.70;
+const TAUX_COLLECTEUR_DEFAUT = 0.30;
+
+function tauxDepuisUtilisateur(u) {
+  const p = u ? u.taux_commission_pdg : undefined;
+  const c = u ? u.taux_commission_collecteur : undefined;
+  if (typeof p === 'number' && typeof c === 'number' && p >= 0 && c >= 0 && Math.abs(p + c - 1) < 0.0005) {
+    return { pdg: p, collecteur: c, personnalise: true };
+  }
+  return { pdg: TAUX_PDG_DEFAUT, collecteur: TAUX_COLLECTEUR_DEFAUT, personnalise: false };
+}
+
+// Frais d'inscription : sans convention personnalisée → paramètres globaux
+// (comme avant) ; sinon la part de redistribution globale est conservée et le
+// reste est partagé PDG / collecteur selon la convention du collecteur.
+function repartitionFraisPourCollecteur(donneesCollecteur) {
+  const t = tauxDepuisUtilisateur(donneesCollecteur);
+  if (!t.personnalise) return { ...parametresInteretsMembre };
+  const r = parametresInteretsMembre.redistribution || 0;
+  return { pdg: (1 - r) * t.pdg, collecteur: (1 - r) * t.collecteur, redistribution: r };
+}
+
 const loginScreen = document.getElementById('loginScreen');
 const loading = document.getElementById('loading');
 const dashboard = document.getElementById('dashboard');
@@ -495,7 +525,8 @@ function renderMesContrats() {
     }
   });
 }
-// === FIN MEMBRE — PARTIE 1/2 ===// === MEMBRE — PARTIE 2/2 ===
+// === FIN MEMBRE — PARTIE 1/2 ===
+// === MEMBRE — PARTIE 2/2 ===
 function mettreAJourContratNonSolde() {
   const zone = document.getElementById('contratNonSoldeZone');
   if (!zone) return;
@@ -657,10 +688,23 @@ async function confirmerNouveauContrat(propositionId) {
       contratData.frais_inscription = proposition.frais_inscription || 0;
     }
 
+    // --- NOUVEAU (28 sept 2026) : lecture de la convention de commission du
+    // collecteur. Si la lecture échoue, on n'invente rien : le versement du
+    // jour 1 ne porte pas de taux (l'app PDG/Collecteur appliquera alors la
+    // convention actuelle du collecteur) et les frais suivent les paramètres
+    // globaux comme avant. ---
+    let donneesCollecteur = null;
+    try {
+      const collecteurSnap = await getDoc(doc(db, 'users', proposition.collecteur_id));
+      if (collecteurSnap.exists()) donneesCollecteur = collecteurSnap.data();
+    } catch (errLecture) {
+      console.warn('Convention de commission du collecteur illisible :', errLecture);
+    }
+
     const contratRef = await addDoc(collection(db, 'contracts'), contratData);
 
     if (typeContrat === 'journalier') {
-      await addDoc(collection(db, 'payments'), {
+      const versementJour1 = {
         contract_id: contratRef.id,
         collecteur_id: proposition.collecteur_id,
         membre_id: currentUser.uid,
@@ -668,10 +712,17 @@ async function confirmerNouveauContrat(propositionId) {
         jour_numero: 1,
         statut: 'collecte',
         date: serverTimestamp(),
-      });
+      };
+      if (donneesCollecteur) {
+        const tCollecteur = tauxDepuisUtilisateur(donneesCollecteur);
+        versementJour1.taux_pdg = tCollecteur.pdg;
+        versementJour1.taux_collecteur = tCollecteur.collecteur;
+      }
+      await addDoc(collection(db, 'payments'), versementJour1);
     } else if (proposition.frais_inscription > 0) {
-      const montantPdg = proposition.frais_inscription * parametresInteretsMembre.pdg;
-      const montantCollecteur = proposition.frais_inscription * parametresInteretsMembre.collecteur;
+      const repartition = repartitionFraisPourCollecteur(donneesCollecteur);
+      const montantPdg = proposition.frais_inscription * repartition.pdg;
+      const montantCollecteur = proposition.frais_inscription * repartition.collecteur;
       await addDoc(collection(db, 'frais_inscription'), {
         contract_id: contratRef.id,
         membre_id: currentUser.uid,
